@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { db } from "../db.js";
 import { requireAuth, requireRole, type AuthedRequest } from "../middleware/auth.js";
+import { sendNewOfferEmail, sendOfferAcceptedEmail } from "../utils/notifyEmails.js";
+import { getAppSettings } from "../utils/settings.js";
 
 const router = Router();
 
@@ -42,7 +44,7 @@ router.post("/job/:jobId", requireAuth, requireRole("technician"), async (req: A
 
     const { data: job, error: jobErr } = await db
       .from("jobs")
-      .select("id, user_id, status")
+      .select("id, user_id, status, title")
       .eq("id", req.params.jobId)
       .single();
 
@@ -52,6 +54,20 @@ router.post("/job/:jobId", requireAuth, requireRole("technician"), async (req: A
     }
     if (job.status !== "open") {
       return res.status(400).json({ error: "Job is no longer open for offers" });
+    }
+
+    const settings = await getAppSettings();
+    if (settings.requireVerifiedToQuote) {
+      const { data: profile } = await db
+        .from("technician_profiles")
+        .select("verified")
+        .eq("user_id", req.user!.id)
+        .maybeSingle();
+      if (!profile?.verified) {
+        return res.status(403).json({
+          error: "Akun tukang belum diverifikasi. Tunggu persetujuan admin sebelum mengirim penawaran.",
+        });
+      }
     }
 
     const { data, error } = await db
@@ -71,6 +87,28 @@ router.post("/job/:jobId", requireAuth, requireRole("technician"), async (req: A
     if (error) {
       if (error.code === "23505") return res.status(409).json({ error: "You already quoted this job" });
       throw error;
+    }
+
+    const { data: owner } = await db
+      .from("users")
+      .select("email, full_name")
+      .eq("id", job.user_id)
+      .single();
+    const techName = req.user!.email; // fallback
+    const { data: tech } = await db
+      .from("users")
+      .select("full_name")
+      .eq("id", req.user!.id)
+      .single();
+
+    if (owner?.email) {
+      sendNewOfferEmail(
+        owner.email,
+        owner.full_name,
+        job.title,
+        tech?.full_name ?? techName,
+        Number(price),
+      ).catch(console.error);
     }
 
     res.status(201).json({ offer: data });
@@ -108,7 +146,7 @@ router.post("/:id/accept", requireAuth, async (req: AuthedRequest, res) => {
 
     const { data: job, error: jobErr } = await db
       .from("jobs")
-      .select("id, user_id, status")
+      .select("id, user_id, status, title")
       .eq("id", offer.job_id)
       .single();
 
@@ -135,6 +173,15 @@ router.post("/:id/accept", requireAuth, async (req: AuthedRequest, res) => {
         assigned_technician_id: offer.technician_id,
       })
       .eq("id", offer.job_id);
+
+    const { data: tech } = await db
+      .from("users")
+      .select("email, full_name")
+      .eq("id", offer.technician_id)
+      .single();
+    if (tech?.email) {
+      sendOfferAcceptedEmail(tech.email, tech.full_name, job.title).catch(console.error);
+    }
 
     res.json({ offer, jobId: offer.job_id });
   } catch (err) {
