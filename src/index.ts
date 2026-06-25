@@ -8,12 +8,20 @@ import offerRoutes from "./routes/offers.js";
 import technicianRoutes from "./routes/technicians.js";
 import paymentRoutes from "./routes/payments.js";
 import uploadRoutes from "./routes/upload.js";
+import reviewRoutes from "./routes/reviews.js";
+import adminRoutes from "./routes/admin.js";
+import appRoutes from "./routes/app.js";
 
 const app = express();
 const JSON_LIMIT_DEFAULT = "256kb";
 const JSON_LIMIT_UPLOAD = "8mb";
 
-app.use(cors({ origin: config.frontendUrl, credentials: true }));
+app.use(
+  cors({
+    origin: config.corsOrigins.length === 1 ? config.corsOrigins[0] : config.corsOrigins,
+    credentials: true,
+  }),
+);
 app.use("/api/upload", express.json({ limit: JSON_LIMIT_UPLOAD }));
 app.use(express.json({ limit: JSON_LIMIT_DEFAULT }));
 app.use(cookieParser());
@@ -27,6 +35,9 @@ app.use("/api/offers", offerRoutes);
 app.use("/api/technicians", technicianRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/upload", uploadRoutes);
+app.use("/api/reviews", reviewRoutes);
+app.use("/api/admin", adminRoutes);
+app.use("/api/app", appRoutes);
 
 app.listen(config.port, () => {
   console.log(`KerjaIn API running on http://localhost:${config.port}`);
