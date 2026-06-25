@@ -3,7 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const projectRoot = path.resolve(__dirname, "../..");
+const projectRoot = path.resolve(__dirname, "..");
 
 // Base .env (local dev). Production host can set vars directly or use .env.production.
 dotenv.config({ path: path.join(projectRoot, ".env") });
