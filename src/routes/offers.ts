@@ -1,0 +1,135 @@
+import { Router } from "express";
+import { db } from "../db.js";
+import { requireAuth, requireRole, type AuthedRequest } from "../middleware/auth.js";
+
+const router = Router();
+
+router.get("/job/:jobId", async (req, res) => {
+  try {
+    const { data, error } = await db
+      .from("offers")
+      .select("*, technician:users!offers_technician_id_fkey(id, full_name, avatar_url)")
+      .eq("job_id", req.params.jobId)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    const offers = (data ?? []).map((o) => ({
+      id: o.id,
+      jobId: o.job_id,
+      technicianId: o.technician_id,
+      price: o.price,
+      priceFormatted: `Rp ${Math.round(o.price / 1000)}rb`,
+      message: o.message,
+      availability: o.availability,
+      scheduledTime: o.scheduled_time,
+      status: o.status,
+      technicianName: o.technician?.full_name ?? "Tukang",
+      createdAt: o.created_at,
+    }));
+
+    res.json({ offers });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch offers" });
+  }
+});
+
+router.post("/job/:jobId", requireAuth, requireRole("technician"), async (req: AuthedRequest, res) => {
+  try {
+    const { price, message, availability = "segera", scheduledTime } = req.body;
+    if (!price) return res.status(400).json({ error: "Price required" });
+
+    const { data: job, error: jobErr } = await db
+      .from("jobs")
+      .select("id, user_id, status")
+      .eq("id", req.params.jobId)
+      .single();
+
+    if (jobErr || !job) return res.status(404).json({ error: "Job not found" });
+    if (job.user_id === req.user!.id) {
+      return res.status(403).json({ error: "You cannot quote your own job" });
+    }
+    if (job.status !== "open") {
+      return res.status(400).json({ error: "Job is no longer open for offers" });
+    }
+
+    const { data, error } = await db
+      .from("offers")
+      .insert({
+        job_id: req.params.jobId,
+        technician_id: req.user!.id,
+        price: Number(price),
+        message: message ?? null,
+        availability,
+        scheduled_time: scheduledTime ?? null,
+        status: "pending",
+      })
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === "23505") return res.status(409).json({ error: "You already quoted this job" });
+      throw error;
+    }
+
+    res.status(201).json({ offer: data });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to create offer" });
+  }
+});
+
+router.get("/mine", requireAuth, requireRole("technician"), async (req: AuthedRequest, res) => {
+  try {
+    const { data, error } = await db
+      .from("offers")
+      .select("*, job:jobs(*)")
+      .eq("technician_id", req.user!.id)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+    res.json({ offers: data ?? [] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch offers" });
+  }
+});
+
+router.post("/:id/accept", requireAuth, async (req: AuthedRequest, res) => {
+  try {
+    const { data: offer, error: offerErr } = await db
+      .from("offers")
+      .select("*, job:jobs(*)")
+      .eq("id", req.params.id)
+      .single();
+
+    if (offerErr || !offer) return res.status(404).json({ error: "Offer not found" });
+    if (offer.job.user_id !== req.user!.id) {
+      return res.status(403).json({ error: "Only the job owner can accept offers" });
+    }
+
+    await db.from("offers").update({ status: "accepted" }).eq("id", offer.id);
+    await db
+      .from("offers")
+      .update({ status: "rejected" })
+      .eq("job_id", offer.job_id)
+      .neq("id", offer.id)
+      .eq("status", "pending");
+
+    await db
+      .from("jobs")
+      .update({
+        status: "assigned",
+        assigned_technician_id: offer.technician_id,
+      })
+      .eq("id", offer.job_id);
+
+    res.json({ offer, jobId: offer.job_id });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to accept offer" });
+  }
+});
+
+export default router;
