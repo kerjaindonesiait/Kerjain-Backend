@@ -3,10 +3,11 @@ import { db, type UserRow } from "../db.js";
 import { hashPassword, verifyPassword } from "../utils/password.js";
 import { hashToken, signAccessToken, verifyRefreshToken } from "../utils/jwt.js";
 import { findOrCreateOAuthUser, issueTokens } from "../utils/oauth.js";
-import { consumeToken, sendPasswordResetEmail, sendVerificationEmail, sendWelcomeEmail } from "../utils/authTokens.js";
+import { consumeToken, sendPasswordResetEmail, sendVerificationEmail } from "../utils/authTokens.js";
 import { resolveCustomerPhone } from "../utils/phone.js";
 import { config } from "../config.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
+import { clearAuthCookies, getRefreshTokenFromRequest, setAccessCookie, setAuthCookies } from "../utils/cookies.js";
 
 const router = Router();
 
@@ -76,17 +77,12 @@ router.post("/register", async (req, res) => {
     const user = data as UserRow;
     let devVerifyLink: string | undefined;
     try {
-      if (role === "technician") {
-        await sendWelcomeEmail(user.email, user.full_name);
-      } else {
-        devVerifyLink = await sendVerificationEmail(user.id, user.email, user.full_name);
-      }
+      devVerifyLink = await sendVerificationEmail(user.id, user.email, user.full_name);
     } catch (e) {
       console.error("Registration email failed:", e);
     }
 
-    const tokens = await issueTokens(user);
-    res.status(201).json({ ...tokens, devVerifyLink });
+    res.status(201).json({ ok: true, user: publicUser(user), devVerifyLink });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Registration failed" });
@@ -107,9 +103,11 @@ router.post("/login", async (req, res) => {
 
     const valid = await verifyPassword(password, data.password_hash);
     if (!valid) return res.status(401).json({ error: "Invalid credentials" });
+    if (!data.email_verified) return res.status(403).json({ error: "Email belum terverifikasi" });
 
     const tokens = await issueTokens(data as UserRow);
-    res.json(tokens);
+    setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
+    res.json({ user: tokens.user });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Login failed" });
@@ -118,7 +116,7 @@ router.post("/login", async (req, res) => {
 
 router.post("/refresh", async (req, res) => {
   try {
-    const { refreshToken } = req.body;
+    const refreshToken = getRefreshTokenFromRequest(req);
     if (!refreshToken) return res.status(400).json({ error: "Refresh token required" });
 
     const payload = verifyRefreshToken(refreshToken);
@@ -138,7 +136,8 @@ router.post("/refresh", async (req, res) => {
     if (!user) return res.status(401).json({ error: "User not found" });
 
     const accessToken = signAccessToken({ sub: user.id, email: user.email, role: user.role });
-    res.json({ accessToken, user: publicUser(user as UserRow) });
+    setAccessCookie(res, accessToken);
+    res.json({ user: publicUser(user as UserRow) });
   } catch {
     res.status(401).json({ error: "Invalid refresh token" });
   }
@@ -150,15 +149,21 @@ router.get("/me", requireAuth, async (req: AuthedRequest, res) => {
   res.json({ user: publicUser(data as UserRow) });
 });
 
-router.post("/logout", requireAuth, async (req: AuthedRequest, res) => {
-  const { refreshToken } = req.body;
+router.post("/logout", async (req, res) => {
+  const refreshToken = getRefreshTokenFromRequest(req);
   if (refreshToken) {
-    await db
-      .from("refresh_tokens")
-      .delete()
-      .eq("user_id", req.user!.id)
-      .eq("token_hash", hashToken(refreshToken));
+    try {
+      const payload = verifyRefreshToken(refreshToken);
+      await db
+        .from("refresh_tokens")
+        .delete()
+        .eq("user_id", payload.sub)
+        .eq("token_hash", hashToken(refreshToken));
+    } catch {
+      // Clear local cookies even if the refresh token is already invalid.
+    }
   }
+  clearAuthCookies(res);
   res.json({ ok: true });
 });
 

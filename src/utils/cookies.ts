@@ -44,8 +44,6 @@ export function getAccessTokenFromRequest(req: Request): string | null {
 export function getRefreshTokenFromRequest(req: Request): string | null {
   const fromCookie = req.cookies?.[REFRESH_COOKIE];
   if (typeof fromCookie === "string" && fromCookie) return fromCookie;
-  const body = req.body as { refreshToken?: string } | undefined;
-  if (body?.refreshToken) return body.refreshToken;
   return null;
 }
 

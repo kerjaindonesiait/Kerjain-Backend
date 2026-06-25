@@ -25,6 +25,12 @@ function requireUrl(envValue: string | undefined, name: string, devFallback: str
   );
 }
 
+function optionalUrl(envValue: string | undefined, devFallback = ""): string {
+  if (envValue?.trim()) return normalizeUrl(envValue);
+  if (!isProduction) return devFallback;
+  return "";
+}
+
 function required(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`Missing env: ${name}`);
@@ -40,22 +46,43 @@ function parseOrigins(frontendUrl: string): string[] {
 }
 
 const frontendUrl = requireUrl(process.env.FRONTEND_URL, "FRONTEND_URL", "http://localhost:5173");
-const apiPublicUrl = requireUrl(
+const apiPublicUrl = optionalUrl(
   process.env.API_PUBLIC_URL ?? process.env.BACKEND_URL,
-  "API_PUBLIC_URL",
   "http://localhost:3000",
 );
+const googleClientId = process.env.GOOGLE_CLIENT_ID ?? "";
+const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET ?? "";
+const facebookAppId = process.env.FACEBOOK_APP_ID ?? "";
+const facebookAppSecret = process.env.FACEBOOK_APP_SECRET ?? "";
+const explicitGoogleRedirectUri = process.env.GOOGLE_REDIRECT_URI;
+const explicitFacebookRedirectUri = process.env.FACEBOOK_REDIRECT_URI;
+const googleRedirectUri = explicitGoogleRedirectUri?.trim()
+  ? normalizeUrl(explicitGoogleRedirectUri)
+  : apiPublicUrl
+    ? `${apiPublicUrl}/auth/google/callback`
+    : "";
+const facebookRedirectUri = explicitFacebookRedirectUri?.trim()
+  ? normalizeUrl(explicitFacebookRedirectUri)
+  : apiPublicUrl
+    ? `${apiPublicUrl}/auth/facebook/callback`
+    : "";
 
 if (isProduction) {
   for (const [name, url] of [
     ["FRONTEND_URL", frontendUrl],
     ["API_PUBLIC_URL", apiPublicUrl],
-    ["GOOGLE_REDIRECT_URI", process.env.GOOGLE_REDIRECT_URI ?? `${apiPublicUrl}/auth/google/callback`],
-    ["FACEBOOK_REDIRECT_URI", process.env.FACEBOOK_REDIRECT_URI ?? `${apiPublicUrl}/auth/facebook/callback`],
+    ["GOOGLE_REDIRECT_URI", googleRedirectUri],
+    ["FACEBOOK_REDIRECT_URI", facebookRedirectUri],
   ] as const) {
-    if (url.includes("localhost") || url.includes("127.0.0.1")) {
+    if (url && (url.includes("localhost") || url.includes("127.0.0.1"))) {
       throw new Error(`${name} must not use localhost in production (got ${url})`);
     }
+  }
+  if (googleClientId && googleClientSecret && !googleRedirectUri) {
+    throw new Error("Missing GOOGLE_REDIRECT_URI or API_PUBLIC_URL in production while Google OAuth is configured");
+  }
+  if (facebookAppId && facebookAppSecret && !facebookRedirectUri) {
+    throw new Error("Missing FACEBOOK_REDIRECT_URI or API_PUBLIC_URL in production while Facebook OAuth is configured");
   }
 }
 
@@ -70,18 +97,14 @@ export const config = {
   jwtAccessSecret: required("JWT_ACCESS_SECRET"),
   jwtRefreshSecret: required("JWT_REFRESH_SECRET"),
   google: {
-    clientId: process.env.GOOGLE_CLIENT_ID ?? "",
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
-    redirectUri:
-      process.env.GOOGLE_REDIRECT_URI?.trim() ||
-      `${apiPublicUrl}/auth/google/callback`,
+    clientId: googleClientId,
+    clientSecret: googleClientSecret,
+    redirectUri: googleRedirectUri,
   },
   facebook: {
-    appId: process.env.FACEBOOK_APP_ID ?? "",
-    appSecret: process.env.FACEBOOK_APP_SECRET ?? "",
-    redirectUri:
-      process.env.FACEBOOK_REDIRECT_URI?.trim() ||
-      `${apiPublicUrl}/auth/facebook/callback`,
+    appId: facebookAppId,
+    appSecret: facebookAppSecret,
+    redirectUri: facebookRedirectUri,
   },
   email: {
     from: process.env.EMAIL_FROM ?? "KerjaIn <onboarding@resend.dev>",
