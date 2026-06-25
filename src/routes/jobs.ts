@@ -3,6 +3,7 @@ import { db } from "../db.js";
 import { requireAuth, optionalAuth, requireRole, type AuthedRequest } from "../middleware/auth.js";
 import { geocodeJobLocation } from "../utils/geocode.js";
 import { validateCreateJobBody } from "../utils/jobValidation.js";
+import { canAccessJobWorkspace, releaseEscrowForJob } from "../utils/jobWorkspace.js";
 
 const router = Router();
 
@@ -147,6 +148,31 @@ router.get("/mine", requireAuth, async (req: AuthedRequest, res) => {
   }
 });
 
+router.get("/assigned", requireAuth, requireRole("technician"), async (req: AuthedRequest, res) => {
+  try {
+    const { status } = req.query;
+    let query = db
+      .from("jobs")
+      .select("*")
+      .eq("assigned_technician_id", req.user!.id)
+      .order("created_at", { ascending: false });
+
+    if (status && typeof status === "string") {
+      query = query.eq("status", status);
+    } else {
+      query = query.in("status", ["assigned", "in_progress", "completed"]);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    const jobs = await Promise.all((data ?? []).map((j) => enrichJob(j)));
+    res.json({ jobs });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Gagal memuat pekerjaan yang ditugaskan" });
+  }
+});
+
 router.post("/:id/cancel", requireAuth, requireRole("user"), async (req: AuthedRequest, res) => {
   try {
     const { data: job, error: fetchErr } = await db
@@ -177,6 +203,41 @@ router.post("/:id/cancel", requireAuth, requireRole("user"), async (req: AuthedR
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Gagal membatalkan pekerjaan" });
+  }
+});
+
+router.post("/:id/complete", requireAuth, async (req: AuthedRequest, res) => {
+  try {
+    const { data: job, error: fetchErr } = await db
+      .from("jobs")
+      .select("*")
+      .eq("id", req.params.id)
+      .single();
+
+    if (fetchErr || !job) {
+      return res.status(404).json({ error: "Pekerjaan tidak ditemukan" });
+    }
+    if (!canAccessJobWorkspace(job, req.user!)) {
+      return res.status(403).json({ error: "Anda tidak berhak menyelesaikan pekerjaan ini" });
+    }
+    if (job.status !== "in_progress") {
+      return res.status(400).json({ error: "Hanya pekerjaan yang sedang berjalan yang bisa diselesaikan" });
+    }
+
+    await releaseEscrowForJob(job.id);
+
+    const { data: updated, error } = await db
+      .from("jobs")
+      .select("*")
+      .eq("id", job.id)
+      .single();
+
+    if (error || !updated) throw error ?? new Error("Job not found after complete");
+
+    res.json({ job: await enrichJob(updated) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Gagal menyelesaikan pekerjaan" });
   }
 });
 
