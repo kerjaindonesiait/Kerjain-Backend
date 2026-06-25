@@ -59,7 +59,7 @@ function urgencyFromWaktu(waktuType: string) {
   return "Fleksibel";
 }
 
-async function enrichJob(job: Record<string, unknown>) {
+async function enrichJob(job: Record<string, unknown>, viewerId?: string) {
   const { count } = await db
     .from("offers")
     .select("*", { count: "exact", head: true })
@@ -103,6 +103,8 @@ async function enrichJob(job: Record<string, unknown>) {
     poster: poster
       ? { name: poster.full_name ?? poster.email, initials, color: "#2E5090", rating: 4.8, reviews: 0, memberSince: "2024", completionRate: 95 }
       : null,
+    ownerId: job.user_id as string,
+    isOwner: viewerId ? job.user_id === viewerId : false,
     createdAt: job.created_at,
   };
 }
@@ -124,7 +126,7 @@ router.get("/", optionalAuth, async (req: AuthedRequest, res) => {
       rows = rows.filter((j) => j.user_id !== req.user!.id);
     }
 
-    const jobs = await Promise.all(rows.map((j) => enrichJob(j)));
+    const jobs = await Promise.all(rows.map((j) => enrichJob(j, req.user?.id)));
     res.json({ jobs });
   } catch (err) {
     console.error(err);
@@ -140,7 +142,7 @@ router.get("/mine", requireAuth, async (req: AuthedRequest, res) => {
       .eq("user_id", req.user!.id)
       .order("created_at", { ascending: false });
     if (error) throw error;
-    const jobs = await Promise.all((data ?? []).map((j) => enrichJob(j)));
+    const jobs = await Promise.all((data ?? []).map((j) => enrichJob(j, req.user!.id)));
     res.json({ jobs });
   } catch (err) {
     console.error(err);
@@ -165,7 +167,7 @@ router.get("/assigned", requireAuth, requireRole("technician"), async (req: Auth
 
     const { data, error } = await query;
     if (error) throw error;
-    const jobs = await Promise.all((data ?? []).map((j) => enrichJob(j)));
+    const jobs = await Promise.all((data ?? []).map((j) => enrichJob(j, req.user!.id)));
     res.json({ jobs });
   } catch (err) {
     console.error(err);
@@ -199,7 +201,7 @@ router.post("/:id/cancel", requireAuth, requireRole("user"), async (req: AuthedR
       .single();
 
     if (error) throw error;
-    res.json({ job: await enrichJob(data) });
+    res.json({ job: await enrichJob(data, req.user!.id) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Gagal membatalkan pekerjaan" });
@@ -234,18 +236,18 @@ router.post("/:id/complete", requireAuth, async (req: AuthedRequest, res) => {
 
     if (error || !updated) throw error ?? new Error("Job not found after complete");
 
-    res.json({ job: await enrichJob(updated) });
+    res.json({ job: await enrichJob(updated, req.user!.id) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Gagal menyelesaikan pekerjaan" });
   }
 });
 
-router.get("/:id", async (req, res) => {
+router.get("/:id", optionalAuth, async (req: AuthedRequest, res) => {
   try {
     const { data, error } = await db.from("jobs").select("*").eq("id", req.params.id).single();
     if (error || !data) return res.status(404).json({ error: "Job not found" });
-    res.json({ job: await enrichJob(data) });
+    res.json({ job: await enrichJob(data, req.user?.id) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to fetch job" });
@@ -292,7 +294,7 @@ router.post("/", requireAuth, requireRole("user"), async (req: AuthedRequest, re
       .single();
 
     if (error) throw error;
-    res.status(201).json({ job: await enrichJob(data) });
+    res.status(201).json({ job: await enrichJob(data, req.user!.id) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to create job" });

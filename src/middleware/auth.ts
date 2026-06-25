@@ -18,7 +18,7 @@ function attachUser(req: AuthedRequest, token: string): boolean {
 export function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {
   const token = getAccessTokenFromRequest(req);
   if (!token || !attachUser(req, token)) {
-    return res.status(401).json({ error: "Unauthorized" });
+    return res.status(401).json({ error: "Silakan masuk terlebih dahulu" });
   }
   next();
 }
@@ -31,9 +31,15 @@ export function optionalAuth(req: AuthedRequest, res: Response, next: NextFuncti
 
 export function requireRole(...roles: string[]) {
   return (req: AuthedRequest, res: Response, next: NextFunction) => {
-    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+    if (!req.user) return res.status(401).json({ error: "Silakan masuk terlebih dahulu" });
     if (!roles.includes(req.user.role)) {
-      return res.status(403).json({ error: "Forbidden" });
+      const message =
+        roles.includes("user") && req.user.role === "technician"
+          ? "Fitur ini hanya untuk akun pelanggan. Akun tukang tidak dapat memposting pekerjaan."
+          : roles.includes("technician") && req.user.role === "user"
+            ? "Fitur ini hanya untuk akun tukang."
+            : "Akses ditolak untuk peran akun Anda.";
+      return res.status(403).json({ error: message });
     }
     next();
   };

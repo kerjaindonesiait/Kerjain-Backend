@@ -100,13 +100,24 @@ router.post("/:id/accept", requireAuth, async (req: AuthedRequest, res) => {
   try {
     const { data: offer, error: offerErr } = await db
       .from("offers")
-      .select("*, job:jobs(*)")
+      .select("*")
       .eq("id", req.params.id)
       .single();
 
-    if (offerErr || !offer) return res.status(404).json({ error: "Offer not found" });
-    if (offer.job.user_id !== req.user!.id) {
-      return res.status(403).json({ error: "Only the job owner can accept offers" });
+    if (offerErr || !offer) return res.status(404).json({ error: "Penawaran tidak ditemukan" });
+
+    const { data: job, error: jobErr } = await db
+      .from("jobs")
+      .select("id, user_id, status")
+      .eq("id", offer.job_id)
+      .single();
+
+    if (jobErr || !job) return res.status(404).json({ error: "Pekerjaan tidak ditemukan" });
+    if (job.user_id !== req.user!.id) {
+      return res.status(403).json({ error: "Hanya pemilik pekerjaan yang dapat menerima penawaran" });
+    }
+    if (job.status !== "open") {
+      return res.status(400).json({ error: "Pekerjaan tidak lagi terbuka untuk penawaran" });
     }
 
     await db.from("offers").update({ status: "accepted" }).eq("id", offer.id);
@@ -128,7 +139,7 @@ router.post("/:id/accept", requireAuth, async (req: AuthedRequest, res) => {
     res.json({ offer, jobId: offer.job_id });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Failed to accept offer" });
+    res.status(500).json({ error: "Gagal menerima penawaran" });
   }
 });
 
