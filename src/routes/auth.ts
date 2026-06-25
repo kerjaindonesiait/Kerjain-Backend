@@ -1,4 +1,5 @@
 import { Router } from "express";
+import jwt from "jsonwebtoken";
 import { db, type UserRow } from "../db.js";
 import { hashPassword, verifyPassword } from "../utils/password.js";
 import { hashToken, signAccessToken, verifyRefreshToken } from "../utils/jwt.js";
@@ -7,9 +8,19 @@ import { consumeToken, sendPasswordResetEmail, sendVerificationEmail } from "../
 import { resolveCustomerPhone } from "../utils/phone.js";
 import { config } from "../config.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
-import { clearAuthCookies, getRefreshTokenFromRequest, setAccessCookie, setAuthCookies } from "../utils/cookies.js";
+import {
+  clearAuthCookies,
+  getRefreshTokenFromRequest,
+  oauthCallbackUrl,
+  setAccessCookie,
+  setAuthCookies,
+} from "../utils/cookies.js";
 
 const router = Router();
+const OAUTH_STATE_MAX_AGE = "10m";
+
+type OAuthRole = "user" | "technician";
+type OAuthState = { role: OAuthRole; next?: string };
 
 function publicUser(user: UserRow) {
   return {
@@ -24,26 +35,42 @@ function publicUser(user: UserRow) {
   };
 }
 
-function oauthRedirect(tokens: { accessToken: string; refreshToken: string }, next?: string) {
-  const redirect = new URL("/auth/callback", config.frontendUrl);
-  redirect.searchParams.set("access_token", tokens.accessToken);
-  redirect.searchParams.set("refresh_token", tokens.refreshToken);
-  if (next) redirect.searchParams.set("next", next);
+function oauthErrorRedirect(error = "oauth_failed") {
+  const redirect = new URL("/masuk", config.frontendUrl);
+  redirect.searchParams.set("error", error);
   return redirect.toString();
 }
 
-function parseOAuthState(stateParam: string | undefined): { role: "user" | "technician" } {
-  if (!stateParam) return { role: "user" };
+function safeRelativePath(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) return undefined;
   try {
-    const parsed = JSON.parse(Buffer.from(stateParam, "base64url").toString("utf8"));
-    return { role: parsed.role === "technician" ? "technician" : "user" };
+    const parsed = new URL(value, "https://kerjain.local");
+    if (parsed.origin !== "https://kerjain.local") return undefined;
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
   } catch {
-    return { role: "user" };
+    return undefined;
   }
 }
 
-function encodeOAuthState(role: "user" | "technician") {
-  return Buffer.from(JSON.stringify({ role }), "utf8").toString("base64url");
+function parseOAuthRole(value: unknown): OAuthRole {
+  return value === "technician" ? "technician" : "user";
+}
+
+function encodeOAuthState(state: OAuthState) {
+  return jwt.sign(state, config.jwtAccessSecret, { expiresIn: OAUTH_STATE_MAX_AGE });
+}
+
+function parseOAuthState(stateParam: unknown): OAuthState | null {
+  if (typeof stateParam !== "string" || !stateParam) return null;
+  try {
+    const payload = jwt.verify(stateParam, config.jwtAccessSecret) as Partial<OAuthState>;
+    return {
+      role: parseOAuthRole(payload.role),
+      next: safeRelativePath(payload.next),
+    };
+  } catch {
+    return null;
+  }
 }
 
 router.post("/register", async (req, res) => {
@@ -329,7 +356,8 @@ router.get("/google", (req, res) => {
   if (!config.google.clientId || !config.google.clientSecret) {
     return res.status(503).json({ error: "Google OAuth not configured" });
   }
-  const role = req.query.role === "technician" ? "technician" : "user";
+  const role = parseOAuthRole(req.query.role);
+  const next = safeRelativePath(req.query.next) ?? (role === "technician" ? "/daftar-tukang?resume=1&provider=google" : undefined);
   const params = new URLSearchParams({
     client_id: config.google.clientId,
     redirect_uri: config.google.redirectUri,
@@ -337,7 +365,7 @@ router.get("/google", (req, res) => {
     scope: "openid email profile",
     access_type: "offline",
     prompt: "consent",
-    state: encodeOAuthState(role),
+    state: encodeOAuthState({ role, next }),
   });
   res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
 });
@@ -347,7 +375,8 @@ router.get("/google/callback", async (req, res) => {
     const code = req.query.code as string;
     if (!code) return res.status(400).send("Missing code");
 
-    const { role } = parseOAuthState(req.query.state as string | undefined);
+    const state = parseOAuthState(req.query.state);
+    if (!state) return res.redirect(oauthErrorRedirect());
 
     const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
@@ -367,6 +396,7 @@ router.get("/google/callback", async (req, res) => {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
     const profile = await profileRes.json();
+    if (!profile.id || !profile.email) return res.redirect(oauthErrorRedirect("google_profile_failed"));
 
     const user = await findOrCreateOAuthUser({
       provider: "google",
@@ -374,93 +404,25 @@ router.get("/google/callback", async (req, res) => {
       email: profile.email,
       fullName: profile.name ?? null,
       avatarUrl: profile.picture ?? null,
-    }, { role });
+    }, { role: state.role });
 
     const tokens = await issueTokens(user);
-    const next = role === "technician" ? "/daftar-tukang?resume=1&provider=google" : undefined;
-    res.redirect(oauthRedirect(tokens, next));
+    setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
+    res.redirect(oauthCallbackUrl(state.next));
   } catch (err) {
     console.error(err);
-    res.redirect(`${config.frontendUrl}/masuk?error=oauth_failed`);
+    res.redirect(oauthErrorRedirect());
   }
 });
 
 // ─── Facebook OAuth ───────────────────────────────────────────────────────────
 
-router.get("/facebook", (req, res) => {
-  if (!config.facebook.appId || !config.facebook.appSecret) {
-    return res.status(503).json({ error: "Facebook OAuth not configured" });
-  }
-  const role = req.query.role === "technician" ? "technician" : "user";
-  const params = new URLSearchParams({
-    client_id: config.facebook.appId,
-    redirect_uri: config.facebook.redirectUri,
-    scope: "email,public_profile",
-    response_type: "code",
-    state: encodeOAuthState(role),
-  });
-  res.redirect(`https://www.facebook.com/v21.0/dialog/oauth?${params}`);
+router.get("/facebook", (_req, res) => {
+  res.status(503).json({ error: "Facebook OAuth not enabled" });
 });
 
-router.get("/facebook/callback", async (req, res) => {
-  try {
-    const code = req.query.code as string;
-    const error = req.query.error as string | undefined;
-
-    if (error) {
-      console.error("Facebook OAuth error:", error, req.query.error_description);
-      return res.redirect(`${config.frontendUrl}/masuk?error=oauth_denied`);
-    }
-    if (!code) return res.status(400).send("Missing code");
-
-    const { role } = parseOAuthState(req.query.state as string | undefined);
-
-    const tokenUrl = new URL("https://graph.facebook.com/v21.0/oauth/access_token");
-    tokenUrl.searchParams.set("client_id", config.facebook.appId);
-    tokenUrl.searchParams.set("client_secret", config.facebook.appSecret);
-    tokenUrl.searchParams.set("redirect_uri", config.facebook.redirectUri);
-    tokenUrl.searchParams.set("code", code);
-
-    const tokenRes = await fetch(tokenUrl.toString());
-    const tokenData = await tokenRes.json();
-
-    if (!tokenData.access_token) {
-      console.error("Facebook token error:", tokenData);
-      return res.status(400).send("OAuth token exchange failed");
-    }
-
-    const profileUrl = new URL("https://graph.facebook.com/me");
-    profileUrl.searchParams.set("fields", "id,name,email,picture.type(large)");
-    profileUrl.searchParams.set("access_token", tokenData.access_token);
-
-    const profileRes = await fetch(profileUrl.toString());
-    const profile = await profileRes.json();
-
-    if (!profile.id) {
-      console.error("Facebook profile error:", profile);
-      return res.status(400).send("Failed to fetch Facebook profile");
-    }
-
-    const email = profile.email as string | undefined;
-    if (!email) {
-      return res.redirect(`${config.frontendUrl}/masuk?error=facebook_no_email`);
-    }
-
-    const user = await findOrCreateOAuthUser({
-      provider: "facebook",
-      providerUserId: String(profile.id),
-      email,
-      fullName: profile.name ?? null,
-      avatarUrl: profile.picture?.data?.url ?? null,
-    }, { role });
-
-    const tokens = await issueTokens(user);
-    const next = role === "technician" ? "/daftar-tukang?resume=1&provider=facebook" : undefined;
-    res.redirect(oauthRedirect(tokens, next));
-  } catch (err) {
-    console.error(err);
-    res.redirect(`${config.frontendUrl}/masuk?error=oauth_failed`);
-  }
+router.get("/facebook/callback", (_req, res) => {
+  res.redirect(oauthErrorRedirect("oauth_unavailable"));
 });
 
 export default router;
