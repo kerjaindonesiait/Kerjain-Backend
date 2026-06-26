@@ -14,63 +14,33 @@ export async function getJobForMessaging(jobId: string): Promise<JobRow | null> 
     .select("id, user_id, assigned_technician_id, status, title")
     .eq("id", jobId)
     .maybeSingle();
-  if (error) throw error;
-  return data;
+  if (error || !data) return null;
+  return data as JobRow;
 }
 
-/** Technician may message if they have any offer on the job or are assigned. */
 export async function technicianCanMessageOnJob(jobId: string, technicianId: string): Promise<boolean> {
-  const { data: job } = await db
-    .from("jobs")
-    .select("assigned_technician_id")
-    .eq("id", jobId)
-    .maybeSingle();
-  if (!job) return false;
-  if (job.assigned_technician_id === technicianId) return true;
-
-  const { count } = await db
+  const { data: offer } = await db
     .from("offers")
-    .select("*", { count: "exact", head: true })
-    .eq("job_id", jobId)
-    .eq("technician_id", technicianId);
-  return (count ?? 0) > 0;
-}
-
-export async function resolvePeerId(
-  job: JobRow,
-  viewerId: string,
-  viewerRole: string,
-  peerId?: string,
-): Promise<string | null> {
-  if (viewerRole === "technician") {
-    if (job.user_id === viewerId) return null;
-    const allowed = await technicianCanMessageOnJob(job.id, viewerId);
-    return allowed ? job.user_id : null;
-  }
-
-  if (job.user_id !== viewerId) return null;
-  if (!peerId) return job.assigned_technician_id;
-  const allowed = await technicianCanMessageOnJob(job.id, peerId);
-  return allowed ? peerId : null;
-}
-
-export async function getOrCreateThread(jobId: string, technicianId: string) {
-  const { data: existing } = await db
-    .from("job_message_threads")
-    .select("id, job_id, technician_id, created_at, updated_at")
+    .select("id")
     .eq("job_id", jobId)
     .eq("technician_id", technicianId)
     .maybeSingle();
+  if (offer) return true;
 
-  if (existing) return existing;
+  const job = await getJobForMessaging(jobId);
+  return job?.assigned_technician_id === technicianId;
+}
 
-  const now = new Date().toISOString();
-  const { data, error } = await db
-    .from("job_message_threads")
-    .insert({ job_id: jobId, technician_id: technicianId, updated_at: now })
-    .select("id, job_id, technician_id, created_at, updated_at")
-    .single();
-
-  if (error) throw error;
-  return data;
+export async function canAccessJobMessages(
+  job: JobRow,
+  viewer: { id: string; role: string },
+  technicianId: string,
+): Promise<boolean> {
+  if (viewer.id === job.user_id) {
+    return technicianCanMessageOnJob(job.id, technicianId);
+  }
+  if (viewer.role === "technician" && viewer.id === technicianId) {
+    return job.user_id !== viewer.id && (await technicianCanMessageOnJob(job.id, technicianId));
+  }
+  return false;
 }
