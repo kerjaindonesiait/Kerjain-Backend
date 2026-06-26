@@ -5,6 +5,12 @@ import { canAccessJobMessages, getJobForMessaging } from "../utils/messages.js";
 
 const router = Router();
 
+/** Supabase embeds may return a row or an array depending on relationship typing. */
+function unwrapJoin<T>(value: T | T[] | null | undefined): T | null {
+  if (value == null) return null;
+  return Array.isArray(value) ? (value[0] ?? null) : value;
+}
+
 function mapMessage(row: {
   id: string;
   job_id: string;
@@ -38,7 +44,7 @@ router.get("/conversations", requireAuth, async (req: AuthedRequest, res) => {
 
       const threads = await Promise.all(
         (offers ?? []).map(async (o) => {
-          const job = o.job as { id: string; title: string; user_id: string } | null;
+          const job = unwrapJoin(o.job);
           if (!job) return null;
 
           const { data: owner } = await db
@@ -96,7 +102,7 @@ router.get("/conversations", requireAuth, async (req: AuthedRequest, res) => {
         .eq("job_id", job.id);
 
       for (const offer of offers ?? []) {
-        const tech = offer.technician as { full_name: string | null; email: string } | null;
+        const tech = unwrapJoin(offer.technician);
         const { data: lastMsg } = await db
           .from("messages")
           .select("body, created_at, sender_id")
