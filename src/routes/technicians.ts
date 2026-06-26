@@ -2,7 +2,6 @@ import { Router } from "express";
 import { db } from "../db.js";
 import { requireAuth, requireRole, type AuthedRequest } from "../middleware/auth.js";
 import { resolveTechnicianPhone } from "../utils/phone.js";
-import { assertPhoneVerifiedForSave } from "../utils/phoneOtp.js";
 import { isOwnedKtpPath, signKtpPath } from "../utils/ktpStorage.js";
 
 const router = Router();
@@ -100,14 +99,10 @@ router.post("/profile", requireAuth, requireRole("technician"), async (req: Auth
     const body = req.body;
     const userId = req.user!.id;
     let normalizedPhone: string | null = null;
-    let phoneVerified = false;
     if (body.phone) {
-      const verified = await assertPhoneVerifiedForSave(body.phone);
-      if ("error" in verified) return res.status(400).json({ error: verified.error });
       const resolved = await resolveTechnicianPhone(body.phone, userId);
       if ("error" in resolved) return res.status(409).json({ error: resolved.error });
       normalizedPhone = resolved.phone;
-      phoneVerified = true;
     }
 
     const ktpPath = body.ktpPhoto ?? body.ktp_photo_url ?? null;
@@ -123,7 +118,6 @@ router.post("/profile", requireAuth, requireRole("technician"), async (req: Auth
     const payload = {
       user_id: userId,
       phone: normalizedPhone,
-      phone_verified: phoneVerified,
       area: body.area ?? null,
       nik: body.nik ?? null,
       ktp_photo_url: ktpPath,

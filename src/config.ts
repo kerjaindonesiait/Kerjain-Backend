@@ -142,12 +142,6 @@ export const config = {
     serverKey: process.env.MIDTRANS_SERVER_KEY ?? "",
     isProduction: process.env.MIDTRANS_IS_PRODUCTION === "true",
   },
-  whatsapp: {
-    accessToken: process.env.WHATSAPP_ACCESS_TOKEN ?? "",
-    phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID ?? "",
-    /** Approved template with one body variable for the OTP code */
-    templateName: process.env.WHATSAPP_OTP_TEMPLATE ?? "kerjain_otp",
-  },
 };
 
 if (isProduction) {

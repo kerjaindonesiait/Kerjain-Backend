@@ -14,7 +14,6 @@ export type UserRow = {
   password_hash: string | null;
   email_verified: boolean;
   phone: string | null;
-  phone_verified: boolean;
   created_at: string;
 };
 
