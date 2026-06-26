@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import { db, type UserRow } from "../db.js";
 import { hashPassword, verifyPassword } from "../utils/password.js";
 import { hashToken, signAccessToken, verifyRefreshToken } from "../utils/jwt.js";
+import { isAdminEmail } from "../utils/admin.js";
 import { findOrCreateOAuthUser, issueTokens } from "../utils/oauth.js";
 import { consumeToken, sendPasswordResetEmail, sendVerificationEmail } from "../utils/authTokens.js";
 import { resolveCustomerPhone } from "../utils/phone.js";
@@ -130,7 +131,9 @@ router.post("/login", async (req, res) => {
 
     const valid = await verifyPassword(password, data.password_hash);
     if (!valid) return res.status(401).json({ error: "Invalid credentials" });
-    if (!data.email_verified) return res.status(403).json({ error: "Email belum terverifikasi" });
+    if (!data.email_verified && !isAdminEmail(data.email)) {
+      return res.status(403).json({ error: "Email belum terverifikasi" });
+    }
 
     const tokens = await issueTokens(data as UserRow);
     setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
@@ -221,6 +224,34 @@ router.post("/resend-verification", requireAuth, async (req: AuthedRequest, res)
 
     const devVerifyLink = await sendVerificationEmail(user.id, user.email, user.full_name);
     res.json({ ok: true, devVerifyLink });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Gagal mengirim email verifikasi" });
+  }
+});
+
+router.post("/resend-verification-email", async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: "Email required" });
+
+    const { data: user } = await db.from("users").select("*").eq("email", email).maybeSingle();
+    if (!user || user.email_verified) {
+      return res.json({ ok: true, message: "Jika email terdaftar dan belum terverifikasi, kami mengirim tautan verifikasi." });
+    }
+
+    let devVerifyLink: string | undefined;
+    try {
+      devVerifyLink = await sendVerificationEmail(user.id, user.email, user.full_name);
+    } catch (e) {
+      console.error("Resend verification email failed:", e);
+    }
+
+    res.json({
+      ok: true,
+      message: "Jika email terdaftar dan belum terverifikasi, kami mengirim tautan verifikasi.",
+      devVerifyLink,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Gagal mengirim email verifikasi" });

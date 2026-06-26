@@ -45,7 +45,7 @@ router.get("/me", requireAuth, (req: AuthedRequest, res) => {
 
 router.get("/stats", requireAuth, requireAdmin, async (_req, res) => {
   try {
-    const [{ count: pending }, { count: verified }, { count: technicians }, { count: openJobs }] =
+    const [{ count: pending }, { count: verified }, { count: technicians }, { count: openJobs }, { count: pendingEmails }] =
       await Promise.all([
         db
           .from("technician_profiles")
@@ -56,6 +56,7 @@ router.get("/stats", requireAuth, requireAdmin, async (_req, res) => {
         db.from("technician_profiles").select("*", { count: "exact", head: true }).eq("verified", true),
         db.from("technician_profiles").select("*", { count: "exact", head: true }),
         db.from("jobs").select("*", { count: "exact", head: true }).eq("status", "open"),
+        db.from("users").select("*", { count: "exact", head: true }).eq("email_verified", false),
       ]);
 
     res.json({
@@ -64,6 +65,7 @@ router.get("/stats", requireAuth, requireAdmin, async (_req, res) => {
         verifiedTechnicians: verified ?? 0,
         totalTechnicians: technicians ?? 0,
         openJobs: openJobs ?? 0,
+        pendingEmailVerification: pendingEmails ?? 0,
       },
     });
   } catch (err) {
@@ -155,6 +157,75 @@ router.patch("/technicians/:userId/verified", requireAuth, requireAdmin, async (
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Gagal memperbarui verifikasi" });
+  }
+});
+
+function formatUser(row: {
+  id: string;
+  email: string;
+  full_name: string | null;
+  role: string;
+  email_verified: boolean;
+  created_at: string;
+}) {
+  return {
+    userId: row.id,
+    email: row.email,
+    fullName: row.full_name,
+    role: row.role,
+    emailVerified: row.email_verified,
+    memberSince: row.created_at,
+  };
+}
+
+router.get("/users", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const filter = (req.query.filter as string) ?? "unverified_email";
+
+    let query = db
+      .from("users")
+      .select("id, email, full_name, role, email_verified, created_at")
+      .order("created_at", { ascending: false });
+
+    if (filter === "unverified_email") {
+      query = query.eq("email_verified", false);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    res.json({
+      users: (data ?? []).map((row) => formatUser(row as Parameters<typeof formatUser>[0])),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Gagal memuat daftar pengguna" });
+  }
+});
+
+router.patch("/users/:userId/email-verified", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { verified = true } = req.body as { verified?: boolean };
+    if (typeof verified !== "boolean") {
+      return res.status(400).json({ error: "Field verified (boolean) wajib diisi" });
+    }
+
+    const userId = req.params.userId;
+    const { data: updated, error } = await db
+      .from("users")
+      .update({ email_verified: verified })
+      .eq("id", userId)
+      .select("id, email, full_name, role, email_verified, created_at")
+      .single();
+
+    if (error || !updated) {
+      return res.status(404).json({ error: "Pengguna tidak ditemukan" });
+    }
+
+    res.json({ user: formatUser(updated as Parameters<typeof formatUser>[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Gagal memperbarui verifikasi email" });
   }
 });
 
