@@ -4,6 +4,7 @@ import { requireAuth, requireAdmin, type AuthedRequest } from "../middleware/aut
 import { isAdminEmail } from "../utils/admin.js";
 import { sendTechnicianVerifiedEmail } from "../utils/authTokens.js";
 import { getAppSettings, updateAppSettings } from "../utils/settings.js";
+import { signKtpPath } from "../utils/ktpStorage.js";
 
 const router = Router();
 
@@ -30,13 +31,22 @@ function formatTechnician(row: {
     phone: row.phone,
     area: row.area,
     nik: row.nik,
-    ktpPhotoUrl: row.ktp_photo_url,
-    selfiePhotoUrl: row.selfie_photo_url,
+    ktpPhotoPath: row.ktp_photo_url,
+    selfiePhotoPath: row.selfie_photo_url,
     keahlian: row.keahlian ?? [],
     verified: row.verified,
     memberSince: user?.created_at ?? row.created_at,
     hasKtpSubmission: !!(row.ktp_photo_url && row.selfie_photo_url),
   };
+}
+
+async function formatTechnicianWithUrls(row: Parameters<typeof formatTechnician>[0]) {
+  const base = formatTechnician(row);
+  const [ktpPhotoUrl, selfiePhotoUrl] = await Promise.all([
+    signKtpPath(base.ktpPhotoPath),
+    signKtpPath(base.selfiePhotoPath),
+  ]);
+  return { ...base, ktpPhotoUrl, selfiePhotoUrl };
 }
 
 router.get("/me", requireAuth, (req: AuthedRequest, res) => {
@@ -100,7 +110,9 @@ router.get("/technicians", requireAuth, requireAdmin, async (req, res) => {
     if (error) throw error;
 
     res.json({
-      technicians: (data ?? []).map((row) => formatTechnician(row as Parameters<typeof formatTechnician>[0])),
+      technicians: await Promise.all(
+        (data ?? []).map((row) => formatTechnicianWithUrls(row as Parameters<typeof formatTechnician>[0])),
+      ),
     });
   } catch (err) {
     console.error(err);
@@ -151,7 +163,7 @@ router.patch("/technicians/:userId/verified", requireAuth, requireAdmin, async (
     }
 
     res.json({
-      technician: formatTechnician(updated as Parameters<typeof formatTechnician>[0]),
+      technician: await formatTechnicianWithUrls(updated as Parameters<typeof formatTechnician>[0]),
       devDashboardLink,
     });
   } catch (err) {

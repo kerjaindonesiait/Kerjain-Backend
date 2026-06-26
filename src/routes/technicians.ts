@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db } from "../db.js";
 import { requireAuth, requireRole, type AuthedRequest } from "../middleware/auth.js";
 import { resolveTechnicianPhone } from "../utils/phone.js";
+import { isOwnedKtpPath, signKtpPath } from "../utils/ktpStorage.js";
 
 const router = Router();
 
@@ -74,6 +75,8 @@ router.get("/profile", requireAuth, requireRole("technician"), async (req: Authe
 
   if (error) return res.status(500).json({ error: "Failed to fetch profile" });
   const p = data;
+  const ktpPhotoUrl = p ? await signKtpPath(p.ktp_photo_url) : null;
+  const selfiePhotoUrl = p ? await signKtpPath(p.selfie_photo_url) : null;
   res.json({
     profile: p
       ? {
@@ -83,8 +86,8 @@ router.get("/profile", requireAuth, requireRole("technician"), async (req: Authe
           tarif: p.tarif,
           bio: p.bio,
           verified: p.verified ?? false,
-          ktpPhotoUrl: p.ktp_photo_url,
-          selfiePhotoUrl: p.selfie_photo_url,
+          ktpPhotoUrl,
+          selfiePhotoUrl,
           nik: p.nik,
         }
       : null,
@@ -101,13 +104,24 @@ router.post("/profile", requireAuth, requireRole("technician"), async (req: Auth
       normalizedPhone = resolved.phone;
     }
 
+    const ktpPath = body.ktpPhoto ?? body.ktp_photo_url ?? null;
+    const selfiePath = body.selfiePhoto ?? body.selfie_photo_url ?? null;
+    const userId = req.user!.id;
+
+    if (ktpPath && !isOwnedKtpPath(ktpPath, userId)) {
+      return res.status(400).json({ error: "Path foto KTP tidak valid" });
+    }
+    if (selfiePath && !isOwnedKtpPath(selfiePath, userId)) {
+      return res.status(400).json({ error: "Path foto selfie tidak valid" });
+    }
+
     const payload = {
-      user_id: req.user!.id,
+      user_id: userId,
       phone: normalizedPhone,
       area: body.area ?? null,
       nik: body.nik ?? null,
-      ktp_photo_url: body.ktpPhoto ?? body.ktp_photo_url ?? null,
-      selfie_photo_url: body.selfiePhoto ?? body.selfie_photo_url ?? null,
+      ktp_photo_url: ktpPath,
+      selfie_photo_url: selfiePath,
       keahlian: body.keahlian ?? [],
       pengalaman: body.pengalaman ?? null,
       tarif: body.tarif ?? null,
