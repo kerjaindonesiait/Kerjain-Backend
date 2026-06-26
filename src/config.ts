@@ -5,13 +5,17 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
 
+const isVercel = process.env.VERCEL === "1";
+/** True for Vercel production/preview and local NODE_ENV=production (not `vercel dev`). */
+const isProduction =
+  process.env.NODE_ENV === "production" ||
+  (isVercel && process.env.VERCEL_ENV !== "development");
+
 // Base .env (local dev). Production host can set vars directly or use .env.production.
 dotenv.config({ path: path.join(projectRoot, ".env") });
-if (process.env.NODE_ENV === "production") {
+if (isProduction) {
   dotenv.config({ path: path.join(projectRoot, ".env.production"), override: true });
 }
-
-const isProduction = process.env.NODE_ENV === "production";
 
 function normalizeUrl(url: string): string {
   return url.trim().replace(/\/+$/, "");
@@ -59,9 +63,14 @@ function parseOrigins(frontendUrl: string): string[] {
   return [...new Set([frontendUrl, ...(paired ? [paired] : []), ...extra])];
 }
 
+function vercelDeploymentUrl(): string | undefined {
+  const host = process.env.VERCEL_URL?.trim();
+  return host ? normalizeUrl(`https://${host}`) : undefined;
+}
+
 const frontendUrl = requireUrl(process.env.FRONTEND_URL, "FRONTEND_URL", "http://localhost:5173");
 const apiPublicUrl = optionalUrl(
-  process.env.API_PUBLIC_URL ?? process.env.BACKEND_URL,
+  process.env.API_PUBLIC_URL ?? process.env.BACKEND_URL ?? (isProduction ? vercelDeploymentUrl() : undefined),
   "http://localhost:3000",
 );
 const googleClientId = process.env.GOOGLE_CLIENT_ID ?? "";
@@ -137,4 +146,8 @@ export const config = {
 
 if (isProduction) {
   console.log(`KerjaIn config: frontend=${config.frontendUrl} api=${config.apiPublicUrl}`);
+} else if (isVercel) {
+  console.warn(
+    "KerjaIn config: running on Vercel with dev URL fallbacks. Set FRONTEND_URL and API_PUBLIC_URL in the Vercel project.",
+  );
 }
