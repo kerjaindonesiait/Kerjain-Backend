@@ -12,6 +12,7 @@ import reviewRoutes from "./routes/reviews.js";
 import adminRoutes from "./routes/admin.js";
 import appRoutes from "./routes/app.js";
 import webhookRoutes from "./routes/webhooks.js";
+import messageRoutes from "./routes/messages.js";
 
 const app = express();
 const JSON_LIMIT_DEFAULT = "256kb";
@@ -40,6 +41,7 @@ app.use("/api/reviews", reviewRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/app", appRoutes);
 app.use("/api/webhooks", webhookRoutes);
+app.use("/api/messages", messageRoutes);
 
 app.listen(config.port, () => {
   console.log(`KerjaIn API running on http://localhost:${config.port}`);

@@ -49,7 +49,7 @@ router.post("/", requireAuth, async (req: AuthedRequest, res) => {
 
     const amount = offer.price;
     const platformFee = Math.round(amount * PLATFORM_FEE_RATE);
-    const total = amount + platformFee;
+    const total = amount;
     const isVa = ["bca", "mandiri", "bri"].includes(method);
     const orderId = generateOrderId();
     const useMidtrans = isMidtransConfigured() && !isVa && method !== "card";
