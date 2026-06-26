@@ -37,12 +37,26 @@ function required(name: string): string {
   return value;
 }
 
+function pairedWwwOrigin(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+    if (u.hostname.startsWith("www.")) {
+      return `${u.protocol}//${u.hostname.slice(4)}`;
+    }
+    return `${u.protocol}//www.${u.hostname}`;
+  } catch {
+    return null;
+  }
+}
+
 function parseOrigins(frontendUrl: string): string[] {
   const extra = (process.env.CORS_ORIGINS ?? "")
     .split(",")
     .map((o) => normalizeUrl(o))
     .filter(Boolean);
-  return [...new Set([frontendUrl, ...extra])];
+  const paired = pairedWwwOrigin(frontendUrl);
+  return [...new Set([frontendUrl, ...(paired ? [paired] : []), ...extra])];
 }
 
 const frontendUrl = requireUrl(process.env.FRONTEND_URL, "FRONTEND_URL", "http://localhost:5173");

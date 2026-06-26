@@ -19,7 +19,7 @@ const JSON_LIMIT_UPLOAD = "8mb";
 
 app.use(
   cors({
-    origin: config.corsOrigins.length === 1 ? config.corsOrigins[0] : config.corsOrigins,
+    origin: config.corsOrigins,
     credentials: true,
   }),
 );
