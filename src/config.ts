@@ -115,6 +115,10 @@ export const config = {
     .map((e) => e.trim().toLowerCase())
     .filter(Boolean),
   cookieSecure: process.env.COOKIE_SECURE === "true" || isProduction,
+  midtrans: {
+    serverKey: process.env.MIDTRANS_SERVER_KEY ?? "",
+    isProduction: process.env.MIDTRANS_IS_PRODUCTION === "true",
+  },
 };
 
 if (isProduction) {

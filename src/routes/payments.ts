@@ -2,6 +2,8 @@ import { Router } from "express";
 import { db } from "../db.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
 import { escrowReleaseAtFromNow } from "../utils/jobWorkspace.js";
+import { createSnapToken, isMidtransConfigured } from "../utils/midtrans.js";
+import { markPaymentSuccess, notifyPaymentParties } from "./webhooks.js";
 
 const router = Router();
 
@@ -14,6 +16,10 @@ function generateVaNumber() {
   return parts.join(" ");
 }
 
+function generateOrderId() {
+  return `KJ-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+}
+
 router.post("/", requireAuth, async (req: AuthedRequest, res) => {
   try {
     const { jobId, offerId, method } = req.body;
@@ -23,13 +29,21 @@ router.post("/", requireAuth, async (req: AuthedRequest, res) => {
 
     const { data: offer, error: offerErr } = await db
       .from("offers")
-      .select("*, job:jobs(*)")
+      .select("*")
       .eq("id", offerId)
       .single();
 
     if (offerErr || !offer) return res.status(404).json({ error: "Offer not found" });
     if (offer.job_id !== jobId) return res.status(400).json({ error: "Offer does not match job" });
-    if (offer.job.user_id !== req.user!.id) {
+
+    const { data: job, error: jobErr } = await db
+      .from("jobs")
+      .select("id, user_id, title")
+      .eq("id", jobId)
+      .single();
+
+    if (jobErr || !job) return res.status(404).json({ error: "Job not found" });
+    if (job.user_id !== req.user!.id) {
       return res.status(403).json({ error: "Only job owner can pay" });
     }
 
@@ -37,6 +51,8 @@ router.post("/", requireAuth, async (req: AuthedRequest, res) => {
     const platformFee = Math.round(amount * PLATFORM_FEE_RATE);
     const total = amount + platformFee;
     const isVa = ["bca", "mandiri", "bri"].includes(method);
+    const orderId = generateOrderId();
+    const useMidtrans = isMidtransConfigured() && !isVa && method !== "card";
 
     const { data: payment, error } = await db
       .from("payments")
@@ -49,8 +65,8 @@ router.post("/", requireAuth, async (req: AuthedRequest, res) => {
         platform_fee: platformFee,
         total,
         method,
-        status: isVa ? "pending" : "processing",
-        transaction_id: `TXN-${Date.now()}`,
+        status: useMidtrans ? "pending" : isVa ? "pending" : "processing",
+        transaction_id: orderId,
         va_number: isVa ? generateVaNumber() : null,
       })
       .select()
@@ -58,12 +74,24 @@ router.post("/", requireAuth, async (req: AuthedRequest, res) => {
 
     if (error) throw error;
 
-    if (!isVa) {
-      await db.from("payments").update({
-        status: "success",
-        escrow_release_at: escrowReleaseAtFromNow(),
-      }).eq("id", payment.id);
-      await db.from("jobs").update({ status: "in_progress" }).eq("id", jobId);
+    let snapToken: string | null = null;
+    if (useMidtrans) {
+      try {
+        snapToken = await createSnapToken({
+          orderId,
+          grossAmount: total,
+          customerName: req.user!.email,
+          customerEmail: req.user!.email,
+          itemName: job.title,
+        });
+      } catch (e) {
+        console.error("Midtrans Snap error:", e);
+        await db.from("payments").delete().eq("id", payment.id);
+        return res.status(502).json({ error: "Gagal membuat sesi pembayaran Midtrans" });
+      }
+    } else if (!isVa) {
+      await markPaymentSuccess(payment.id, jobId);
+      notifyPaymentParties(payment.id).catch(console.error);
       payment.status = "success";
     }
 
@@ -77,6 +105,8 @@ router.post("/", requireAuth, async (req: AuthedRequest, res) => {
         status: payment.status,
         transactionId: payment.transaction_id,
         vaNumber: payment.va_number,
+        snapToken,
+        midtransEnabled: isMidtransConfigured(),
       },
     });
   } catch (err) {
@@ -96,11 +126,8 @@ router.post("/:id/confirm", requireAuth, async (req: AuthedRequest, res) => {
     if (error || !payment) return res.status(404).json({ error: "Payment not found" });
     if (payment.payer_id !== req.user!.id) return res.status(403).json({ error: "Forbidden" });
 
-    await db.from("payments").update({
-      status: "success",
-      escrow_release_at: escrowReleaseAtFromNow(),
-    }).eq("id", payment.id);
-    await db.from("jobs").update({ status: "in_progress" }).eq("id", payment.job_id);
+    await markPaymentSuccess(payment.id, payment.job_id);
+    notifyPaymentParties(payment.id).catch(console.error);
 
     res.json({ payment: { ...payment, status: "success" } });
   } catch (err) {
