@@ -60,10 +60,16 @@ function urgencyFromWaktu(waktuType: string) {
 }
 
 async function enrichJob(job: Record<string, unknown>, viewerId?: string) {
-  const { count } = await db
-    .from("offers")
-    .select("*", { count: "exact", head: true })
-    .eq("job_id", job.id);
+  const isOwner = viewerId ? job.user_id === viewerId : false;
+
+  let offerCount: number | null = null;
+  if (isOwner) {
+    const { count } = await db
+      .from("offers")
+      .select("*", { count: "exact", head: true })
+      .eq("job_id", job.id);
+    offerCount = count ?? 0;
+  }
 
   const { data: poster } = await db
     .from("users")
@@ -94,7 +100,7 @@ async function enrichJob(job: Record<string, unknown>, viewerId?: string) {
     price: formatPrice(job.budget_raw as number | null),
     status: job.status,
     urgency: job.urgency,
-    offers: count ?? 0,
+    offers: offerCount,
     remote: job.lokasi_type === "remote",
     flexible: job.waktu_type === "fleksibel",
     date: job.tanggal ?? (job.waktu_type === "asap" ? "Hari ini" : null),
@@ -104,7 +110,7 @@ async function enrichJob(job: Record<string, unknown>, viewerId?: string) {
       ? { name: poster.full_name ?? poster.email, initials, color: "#2E5090", rating: 4.8, reviews: 0, memberSince: "2024", completionRate: 95 }
       : null,
     ownerId: job.user_id as string,
-    isOwner: viewerId ? job.user_id === viewerId : false,
+    isOwner,
     createdAt: job.created_at,
   };
 }

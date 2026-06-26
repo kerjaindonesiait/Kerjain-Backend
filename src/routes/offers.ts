@@ -6,8 +6,19 @@ import { getAppSettings } from "../utils/settings.js";
 
 const router = Router();
 
-router.get("/job/:jobId", async (req, res) => {
+router.get("/job/:jobId", requireAuth, async (req: AuthedRequest, res) => {
   try {
+    const { data: job, error: jobErr } = await db
+      .from("jobs")
+      .select("user_id")
+      .eq("id", req.params.jobId)
+      .single();
+
+    if (jobErr || !job) return res.status(404).json({ error: "Job not found" });
+    if (job.user_id !== req.user!.id) {
+      return res.status(403).json({ error: "Hanya pemilik pekerjaan yang dapat melihat penawaran" });
+    }
+
     const { data, error } = await db
       .from("offers")
       .select("*, technician:users!offers_technician_id_fkey(id, full_name, avatar_url)")
