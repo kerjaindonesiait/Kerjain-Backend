@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "../db.js";
 import { requireAuth, requireRole, type AuthedRequest } from "../middleware/auth.js";
 import { resolveTechnicianPhone } from "../utils/phone.js";
-import { requireRecentPhoneVerification } from "../utils/phoneOtp.js";
+import { assertPhoneVerifiedForSave } from "../utils/phoneOtp.js";
 import { isOwnedKtpPath, signKtpPath } from "../utils/ktpStorage.js";
 
 const router = Router();
@@ -98,17 +98,13 @@ router.get("/profile", requireAuth, requireRole("technician"), async (req: Authe
 router.post("/profile", requireAuth, requireRole("technician"), async (req: AuthedRequest, res) => {
   try {
     const body = req.body;
+    const userId = req.user!.id;
     let normalizedPhone: string | null = null;
     let phoneVerified = false;
     if (body.phone) {
-      try {
-        await requireRecentPhoneVerification(body.phone);
-      } catch (e) {
-        return res.status(400).json({
-          error: e instanceof Error ? e.message : "Nomor HP belum diverifikasi",
-        });
-      }
-      const resolved = await resolveTechnicianPhone(body.phone, req.user!.id);
+      const verified = await assertPhoneVerifiedForSave(body.phone);
+      if ("error" in verified) return res.status(400).json({ error: verified.error });
+      const resolved = await resolveTechnicianPhone(body.phone, userId);
       if ("error" in resolved) return res.status(409).json({ error: resolved.error });
       normalizedPhone = resolved.phone;
       phoneVerified = true;
@@ -116,7 +112,6 @@ router.post("/profile", requireAuth, requireRole("technician"), async (req: Auth
 
     const ktpPath = body.ktpPhoto ?? body.ktp_photo_url ?? null;
     const selfiePath = body.selfiePhoto ?? body.selfie_photo_url ?? null;
-    const userId = req.user!.id;
 
     if (ktpPath && !isOwnedKtpPath(ktpPath, userId)) {
       return res.status(400).json({ error: "Path foto KTP tidak valid" });

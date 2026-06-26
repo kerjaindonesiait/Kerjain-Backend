@@ -116,6 +116,7 @@ export async function issueTokens(user: UserRow) {
       avatarUrl: user.avatar_url,
       emailVerified: user.email_verified,
       phone: user.phone ?? null,
+      phoneVerified: user.phone_verified ?? false,
       createdAt: user.created_at,
     },
   };
