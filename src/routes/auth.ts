@@ -7,6 +7,7 @@ import { isAdminEmail } from "../utils/admin.js";
 import { findOrCreateOAuthUser, issueTokens } from "../utils/oauth.js";
 import { consumeToken, sendPasswordResetEmail, sendVerificationEmail } from "../utils/authTokens.js";
 import { resolveCustomerPhone } from "../utils/phone.js";
+import { sendPhoneOtp, verifyPhoneOtp, requireRecentPhoneVerification } from "../utils/phoneOtp.js";
 import { config } from "../config.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
 import {
@@ -258,6 +259,42 @@ router.post("/resend-verification-email", async (req, res) => {
   }
 });
 
+// ─── Phone OTP ────────────────────────────────────────────────────────────────
+
+router.post("/phone/send-otp", async (req, res) => {
+  try {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ error: "Nomor telepon wajib diisi" });
+
+    const result = await sendPhoneOtp(phone);
+    if ("error" in result) return res.status(400).json({ error: result.error });
+
+    res.json({
+      ok: true,
+      message: "Kode verifikasi dikirim ke SMS Anda.",
+      devOtp: result.devOtp,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Gagal mengirim kode verifikasi" });
+  }
+});
+
+router.post("/phone/verify-otp", async (req, res) => {
+  try {
+    const { phone, code } = req.body;
+    if (!phone || !code) return res.status(400).json({ error: "Nomor telepon dan kode wajib diisi" });
+
+    const result = await verifyPhoneOtp(phone, code);
+    if ("error" in result) return res.status(400).json({ error: result.error });
+
+    res.json({ ok: true, phone: result.phone });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Verifikasi gagal" });
+  }
+});
+
 // ─── Password reset ───────────────────────────────────────────────────────────
 
 router.post("/forgot-password", async (req, res) => {
@@ -314,7 +351,7 @@ router.post("/reset-password", async (req, res) => {
 router.patch("/profile", requireAuth, async (req: AuthedRequest, res) => {
   try {
     const { fullName, avatarUrl, phone } = req.body;
-    const updates: Record<string, string | null> = {};
+    const updates: Record<string, string | boolean | null> = {};
     if (fullName !== undefined) updates.full_name = fullName || null;
     if (avatarUrl !== undefined) updates.avatar_url = avatarUrl || null;
 
@@ -324,10 +361,19 @@ router.patch("/profile", requireAuth, async (req: AuthedRequest, res) => {
       }
       if (!phone || !String(phone).trim()) {
         updates.phone = null;
+        updates.phone_verified = false;
       } else {
+        try {
+          await requireRecentPhoneVerification(String(phone));
+        } catch (e) {
+          return res.status(400).json({
+            error: e instanceof Error ? e.message : "Nomor HP belum diverifikasi",
+          });
+        }
         const resolved = await resolveCustomerPhone(String(phone), req.user!.id);
         if ("error" in resolved) return res.status(409).json({ error: resolved.error });
         updates.phone = resolved.phone;
+        updates.phone_verified = true;
       }
     }
 

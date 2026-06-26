@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db } from "../db.js";
 import { requireAuth, requireRole, type AuthedRequest } from "../middleware/auth.js";
 import { resolveTechnicianPhone } from "../utils/phone.js";
+import { requireRecentPhoneVerification } from "../utils/phoneOtp.js";
 import { isOwnedKtpPath, signKtpPath } from "../utils/ktpStorage.js";
 
 const router = Router();
@@ -98,10 +99,19 @@ router.post("/profile", requireAuth, requireRole("technician"), async (req: Auth
   try {
     const body = req.body;
     let normalizedPhone: string | null = null;
+    let phoneVerified = false;
     if (body.phone) {
+      try {
+        await requireRecentPhoneVerification(body.phone);
+      } catch (e) {
+        return res.status(400).json({
+          error: e instanceof Error ? e.message : "Nomor HP belum diverifikasi",
+        });
+      }
       const resolved = await resolveTechnicianPhone(body.phone, req.user!.id);
       if ("error" in resolved) return res.status(409).json({ error: resolved.error });
       normalizedPhone = resolved.phone;
+      phoneVerified = true;
     }
 
     const ktpPath = body.ktpPhoto ?? body.ktp_photo_url ?? null;
@@ -118,6 +128,7 @@ router.post("/profile", requireAuth, requireRole("technician"), async (req: Auth
     const payload = {
       user_id: userId,
       phone: normalizedPhone,
+      phone_verified: phoneVerified,
       area: body.area ?? null,
       nik: body.nik ?? null,
       ktp_photo_url: ktpPath,
