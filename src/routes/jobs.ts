@@ -3,7 +3,7 @@ import { db } from "../db.js";
 import { requireAuth, optionalAuth, requireRole, type AuthedRequest } from "../middleware/auth.js";
 import { geocodeJobLocation } from "../utils/geocode.js";
 import { validateCreateJobBody } from "../utils/jobValidation.js";
-import { canAccessJobWorkspace, releaseEscrowForJob } from "../utils/jobWorkspace.js";
+import { markTechnicianJobDone, releaseEscrowForJob, workspaceViewerRole } from "../utils/jobWorkspace.js";
 
 const router = Router();
 
@@ -111,6 +111,7 @@ async function enrichJob(job: Record<string, unknown>, viewerId?: string) {
       : null,
     ownerId: job.user_id as string,
     isOwner,
+    technicianCompletedAt: (job.technician_completed_at as string | null) ?? null,
     createdAt: job.created_at,
   };
 }
@@ -214,6 +215,72 @@ router.post("/:id/cancel", requireAuth, requireRole("user"), async (req: AuthedR
   }
 });
 
+router.post("/:id/mark-done", requireAuth, requireRole("technician"), async (req: AuthedRequest, res) => {
+  try {
+    const { data: job, error: fetchErr } = await db
+      .from("jobs")
+      .select("*")
+      .eq("id", req.params.id)
+      .single();
+
+    if (fetchErr || !job) {
+      return res.status(404).json({ error: "Pekerjaan tidak ditemukan" });
+    }
+    if (job.assigned_technician_id !== req.user!.id) {
+      return res.status(403).json({ error: "Hanya tukang yang ditugaskan yang dapat menandai selesai" });
+    }
+    if (job.status !== "in_progress") {
+      return res.status(400).json({ error: "Hanya pekerjaan yang sedang berjalan yang bisa ditandai selesai" });
+    }
+    if (job.technician_completed_at) {
+      return res.status(400).json({ error: "Pekerjaan sudah ditandai selesai — menunggu konfirmasi pelanggan" });
+    }
+
+    await markTechnicianJobDone(job.id);
+
+    const { data: updated, error } = await db.from("jobs").select("*").eq("id", job.id).single();
+    if (error || !updated) throw error ?? new Error("Job not found after mark-done");
+
+    res.json({ job: await enrichJob(updated, req.user!.id) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Gagal menandai pekerjaan selesai" });
+  }
+});
+
+router.post("/:id/confirm-complete", requireAuth, async (req: AuthedRequest, res) => {
+  try {
+    const { data: job, error: fetchErr } = await db
+      .from("jobs")
+      .select("*")
+      .eq("id", req.params.id)
+      .single();
+
+    if (fetchErr || !job) {
+      return res.status(404).json({ error: "Pekerjaan tidak ditemukan" });
+    }
+    if (workspaceViewerRole(job, req.user!) !== "owner") {
+      return res.status(403).json({ error: "Hanya pemilik pekerjaan yang dapat mengonfirmasi selesai" });
+    }
+    if (job.status !== "in_progress") {
+      return res.status(400).json({ error: "Pekerjaan tidak sedang berjalan" });
+    }
+    if (!job.technician_completed_at) {
+      return res.status(400).json({ error: "Tukang belum menandai pekerjaan selesai" });
+    }
+
+    await releaseEscrowForJob(job.id);
+
+    const { data: updated, error } = await db.from("jobs").select("*").eq("id", job.id).single();
+    if (error || !updated) throw error ?? new Error("Job not found after confirm");
+
+    res.json({ job: await enrichJob(updated, req.user!.id) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Gagal mengonfirmasi pekerjaan" });
+  }
+});
+
 router.post("/:id/complete", requireAuth, async (req: AuthedRequest, res) => {
   try {
     const { data: job, error: fetchErr } = await db
@@ -225,14 +292,30 @@ router.post("/:id/complete", requireAuth, async (req: AuthedRequest, res) => {
     if (fetchErr || !job) {
       return res.status(404).json({ error: "Pekerjaan tidak ditemukan" });
     }
-    if (!canAccessJobWorkspace(job, req.user!)) {
+
+    const role = workspaceViewerRole(job, req.user!);
+    if (role === "technician") {
+      if (job.assigned_technician_id !== req.user!.id) {
+        return res.status(403).json({ error: "Anda tidak berhak menyelesaikan pekerjaan ini" });
+      }
+      if (job.status !== "in_progress") {
+        return res.status(400).json({ error: "Hanya pekerjaan yang sedang berjalan yang bisa ditandai selesai" });
+      }
+      if (job.technician_completed_at) {
+        return res.status(400).json({ error: "Sudah ditandai selesai — menunggu konfirmasi pelanggan" });
+      }
+      await markTechnicianJobDone(job.id);
+    } else if (role === "owner") {
+      if (job.status !== "in_progress") {
+        return res.status(400).json({ error: "Pekerjaan tidak sedang berjalan" });
+      }
+      if (!job.technician_completed_at) {
+        return res.status(400).json({ error: "Tukang belum menandai pekerjaan selesai" });
+      }
+      await releaseEscrowForJob(job.id);
+    } else {
       return res.status(403).json({ error: "Anda tidak berhak menyelesaikan pekerjaan ini" });
     }
-    if (job.status !== "in_progress") {
-      return res.status(400).json({ error: "Hanya pekerjaan yang sedang berjalan yang bisa diselesaikan" });
-    }
-
-    await releaseEscrowForJob(job.id);
 
     const { data: updated, error } = await db
       .from("jobs")

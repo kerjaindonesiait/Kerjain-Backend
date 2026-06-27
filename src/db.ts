@@ -38,6 +38,7 @@ export type JobRow = {
   latitude: number | null;
   longitude: number | null;
   completed_at: string | null;
+  technician_completed_at: string | null;
   created_at: string;
   updated_at: string;
 };

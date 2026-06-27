@@ -26,8 +26,14 @@ export function workspaceViewerRole(
 }
 
 export async function maybeAutoReleaseEscrow(jobId: string) {
-  const { data: job } = await db.from("jobs").select("status, completed_at").eq("id", jobId).single();
-  if (!job || job.status !== "in_progress" || job.completed_at) return false;
+  const { data: job } = await db
+    .from("jobs")
+    .select("status, completed_at, technician_completed_at")
+    .eq("id", jobId)
+    .single();
+  if (!job || job.status !== "in_progress" || job.completed_at || !job.technician_completed_at) {
+    return false;
+  }
 
   const { data: payment } = await db
     .from("payments")
@@ -52,6 +58,15 @@ export async function maybeAutoReleaseEscrow(jobId: string) {
     .eq("id", payment.id);
 
   return true;
+}
+
+export async function markTechnicianJobDone(jobId: string) {
+  const now = new Date().toISOString();
+  await db
+    .from("jobs")
+    .update({ technician_completed_at: now })
+    .eq("id", jobId)
+    .eq("status", "in_progress");
 }
 
 export async function releaseEscrowForJob(jobId: string) {
