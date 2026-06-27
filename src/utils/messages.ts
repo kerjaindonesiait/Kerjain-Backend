@@ -19,16 +19,14 @@ export async function getJobForMessaging(jobId: string): Promise<JobRow | null> 
 }
 
 export async function technicianCanMessageOnJob(jobId: string, technicianId: string): Promise<boolean> {
-  const { data: offer } = await db
+  const { data: acceptedOffer } = await db
     .from("offers")
     .select("id")
     .eq("job_id", jobId)
     .eq("technician_id", technicianId)
+    .eq("status", "accepted")
     .maybeSingle();
-  if (offer) return true;
-
-  const job = await getJobForMessaging(jobId);
-  return job?.assigned_technician_id === technicianId;
+  return !!acceptedOffer;
 }
 
 export async function canAccessJobMessages(

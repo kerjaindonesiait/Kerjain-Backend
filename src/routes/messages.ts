@@ -38,6 +38,7 @@ router.get("/conversations", requireAuth, async (req: AuthedRequest, res) => {
         .from("offers")
         .select("job_id, technician_id, job:jobs(id, title, user_id)")
         .eq("technician_id", viewer.id)
+        .eq("status", "accepted")
         .order("created_at", { ascending: false });
 
       if (error) throw error;
@@ -99,7 +100,8 @@ router.get("/conversations", requireAuth, async (req: AuthedRequest, res) => {
       const { data: offers } = await db
         .from("offers")
         .select("technician_id, technician:users!offers_technician_id_fkey(full_name, email)")
-        .eq("job_id", job.id);
+        .eq("job_id", job.id)
+        .eq("status", "accepted");
 
       for (const offer of offers ?? []) {
         const tech = unwrapJoin(offer.technician);
@@ -151,7 +153,9 @@ router.get("/job/:jobId", requireAuth, async (req: AuthedRequest, res) => {
     }
 
     const allowed = await canAccessJobMessages(job, req.user!, technicianId);
-    if (!allowed) return res.status(403).json({ error: "Akses pesan ditolak" });
+    if (!allowed) {
+      return res.status(403).json({ error: "Pesan hanya tersedia setelah penawaran diterima" });
+    }
 
     const { data, error } = await db
       .from("messages")
@@ -203,7 +207,9 @@ router.post("/job/:jobId", requireAuth, async (req: AuthedRequest, res) => {
     }
 
     const allowed = await canAccessJobMessages(job, req.user!, technicianId);
-    if (!allowed) return res.status(403).json({ error: "Akses pesan ditolak" });
+    if (!allowed) {
+      return res.status(403).json({ error: "Pesan hanya tersedia setelah penawaran diterima" });
+    }
 
     const { data, error } = await db
       .from("messages")
