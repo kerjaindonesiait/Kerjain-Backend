@@ -2,46 +2,48 @@ import { Router } from "express";
 import { db } from "../db.js";
 import { requireAuth, requireRole, optionalAuth, type AuthedRequest } from "../middleware/auth.js";
 import { refreshTechnicianRating } from "../utils/reviewStats.js";
+import { enrichReviews, mapReviewRow } from "../utils/reviewEnrichment.js";
 
 const router = Router();
 
-function mapReview(row: Record<string, unknown>, reviewerName?: string) {
-  return {
-    id: row.id,
-    jobId: row.job_id,
-    reviewerId: row.reviewer_id,
-    revieweeId: row.reviewee_id,
-    rating: row.rating,
-    comment: row.comment ?? null,
-    reviewerName: reviewerName ?? null,
-    createdAt: row.created_at,
-  };
-}
+router.get("/mine", requireAuth, async (req: AuthedRequest, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 50, 100);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+
+    const { data, error } = await db
+      .from("reviews")
+      .select("id, job_id, reviewer_id, reviewee_id, rating, comment, created_at")
+      .eq("reviewer_id", req.user!.id)
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (error) throw error;
+
+    const reviews = await enrichReviews(data ?? []);
+    res.json({ reviews });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Gagal memuat ulasan Anda" });
+  }
+});
 
 router.get("/technician/:id", async (req, res) => {
   try {
-    const limit = Math.min(Number(req.query.limit) || 10, 50);
+    const limit = Math.min(Number(req.query.limit) || 20, 100);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+
     const { data, error } = await db
       .from("reviews")
       .select("id, job_id, reviewer_id, reviewee_id, rating, comment, created_at")
       .eq("reviewee_id", req.params.id)
       .order("created_at", { ascending: false })
-      .limit(limit);
+      .range(offset, offset + limit - 1);
 
     if (error) throw error;
 
-    const reviewerIds = [...new Set((data ?? []).map((r) => r.reviewer_id))];
-    const names: Record<string, string> = {};
-    if (reviewerIds.length > 0) {
-      const { data: users } = await db.from("users").select("id, full_name").in("id", reviewerIds);
-      for (const u of users ?? []) {
-        names[u.id] = u.full_name ?? "Pelanggan";
-      }
-    }
-
-    res.json({
-      reviews: (data ?? []).map((r) => mapReview(r, names[r.reviewer_id])),
-    });
+    const reviews = await enrichReviews(data ?? []);
+    res.json({ reviews });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Gagal memuat ulasan" });
@@ -59,13 +61,8 @@ router.get("/job/:jobId", optionalAuth, async (req, res) => {
     if (error) throw error;
     if (!data) return res.json({ review: null });
 
-    const { data: reviewer } = await db
-      .from("users")
-      .select("full_name")
-      .eq("id", data.reviewer_id)
-      .single();
-
-    res.json({ review: mapReview(data, reviewer?.full_name ?? undefined) });
+    const [review] = await enrichReviews([data]);
+    res.json({ review });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Gagal memuat ulasan" });
@@ -86,7 +83,7 @@ router.post("/job/:jobId", requireAuth, requireRole("user"), async (req: AuthedR
 
     const { data: job, error: jobErr } = await db
       .from("jobs")
-      .select("id, user_id, assigned_technician_id, status")
+      .select("id, user_id, assigned_technician_id, status, title")
       .eq("id", req.params.jobId)
       .single();
 
@@ -133,8 +130,18 @@ router.post("/job/:jobId", requireAuth, requireRole("user"), async (req: AuthedR
       .eq("id", req.user!.id)
       .single();
 
+    const { data: reviewee } = await db
+      .from("users")
+      .select("full_name")
+      .eq("id", job.assigned_technician_id)
+      .single();
+
     res.status(201).json({
-      review: mapReview(data, reviewer?.full_name ?? undefined),
+      review: mapReviewRow(data, {
+        reviewerName: reviewer?.full_name ?? undefined,
+        revieweeName: reviewee?.full_name ?? undefined,
+        jobTitle: job.title,
+      }),
     });
   } catch (err) {
     console.error(err);

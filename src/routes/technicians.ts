@@ -6,6 +6,56 @@ import { isOwnedKtpPath, signKtpPath } from "../utils/ktpStorage.js";
 
 const router = Router();
 
+router.get("/me/stats", requireAuth, requireRole("technician"), async (req: AuthedRequest, res) => {
+  try {
+    const userId = req.user!.id;
+
+    const { data: profile } = await db
+      .from("technician_profiles")
+      .select("rating, review_count, verified, area")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    const { count: completedJobs } = await db
+      .from("jobs")
+      .select("*", { count: "exact", head: true })
+      .eq("assigned_technician_id", userId)
+      .eq("status", "completed");
+
+    const { count: assignedJobs } = await db
+      .from("jobs")
+      .select("*", { count: "exact", head: true })
+      .eq("assigned_technician_id", userId)
+      .in("status", ["assigned", "in_progress", "completed"]);
+
+    const { count: activeOffers } = await db
+      .from("offers")
+      .select("*", { count: "exact", head: true })
+      .eq("technician_id", userId)
+      .eq("status", "pending");
+
+    const completionRate =
+      assignedJobs && assignedJobs > 0
+        ? Math.round(((completedJobs ?? 0) / assignedJobs) * 100)
+        : null;
+
+    res.json({
+      stats: {
+        rating: profile?.rating != null ? Number(profile.rating) : 0,
+        reviewCount: profile?.review_count ?? 0,
+        completedJobs: completedJobs ?? 0,
+        completionRate,
+        activeOffers: activeOffers ?? 0,
+        verified: profile?.verified ?? false,
+        area: profile?.area ?? null,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Gagal memuat statistik" });
+  }
+});
+
 router.get("/:id/public", async (req, res) => {
   try {
     const { data: user, error: userErr } = await db

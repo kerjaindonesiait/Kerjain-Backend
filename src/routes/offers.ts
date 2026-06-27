@@ -27,19 +27,40 @@ router.get("/job/:jobId", requireAuth, async (req: AuthedRequest, res) => {
 
     if (error) throw error;
 
-    const offers = (data ?? []).map((o) => ({
-      id: o.id,
-      jobId: o.job_id,
-      technicianId: o.technician_id,
-      price: o.price,
-      priceFormatted: `Rp ${Math.round(o.price / 1000)}rb`,
-      message: o.message,
-      availability: o.availability,
-      scheduledTime: o.scheduled_time,
-      status: o.status,
-      technicianName: o.technician?.full_name ?? "Tukang",
-      createdAt: o.created_at,
-    }));
+    const techIds = [...new Set((data ?? []).map((o) => o.technician_id as string))];
+    const profiles: Record<string, { rating: number; review_count: number }> = {};
+    if (techIds.length > 0) {
+      const { data: profs } = await db
+        .from("technician_profiles")
+        .select("user_id, rating, review_count")
+        .in("user_id", techIds);
+      for (const p of profs ?? []) {
+        profiles[p.user_id] = {
+          rating: p.rating != null ? Number(p.rating) : 0,
+          review_count: p.review_count ?? 0,
+        };
+      }
+    }
+
+    const offers = (data ?? []).map((o) => {
+      const prof = profiles[o.technician_id];
+      return {
+        id: o.id,
+        jobId: o.job_id,
+        technicianId: o.technician_id,
+        price: o.price,
+        priceFormatted: `Rp ${Math.round(o.price / 1000)}rb`,
+        message: o.message,
+        availability: o.availability,
+        scheduledTime: o.scheduled_time,
+        status: o.status,
+        technicianName: o.technician?.full_name ?? "Tukang",
+        technicianAvatarUrl: o.technician?.avatar_url ?? null,
+        technicianRating: prof?.rating ?? 0,
+        technicianReviewCount: prof?.review_count ?? 0,
+        createdAt: o.created_at,
+      };
+    });
 
     res.json({ offers });
   } catch (err) {

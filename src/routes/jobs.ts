@@ -4,6 +4,7 @@ import { requireAuth, optionalAuth, requireRole, type AuthedRequest } from "../m
 import { geocodeJobLocation } from "../utils/geocode.js";
 import { validateCreateJobBody } from "../utils/jobValidation.js";
 import { markTechnicianJobDone, releaseEscrowForJob, workspaceViewerRole } from "../utils/jobWorkspace.js";
+import { getPosterStats } from "../utils/posterStats.js";
 
 const router = Router();
 
@@ -73,13 +74,13 @@ async function enrichJob(job: Record<string, unknown>, viewerId?: string) {
 
   const { data: poster } = await db
     .from("users")
-    .select("id, full_name, email")
+    .select("id, full_name, email, avatar_url, created_at")
     .eq("id", job.user_id)
     .single();
 
-  const initials = poster?.full_name
-    ? poster.full_name.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()
-    : "??";
+  const posterStats = poster ? await getPosterStats(job.user_id as string) : null;
+
+  const initials = posterStats?.initials ?? "??";
 
   return {
     id: job.id,
@@ -106,9 +107,7 @@ async function enrichJob(job: Record<string, unknown>, viewerId?: string) {
     date: job.tanggal ?? (job.waktu_type === "asap" ? "Hari ini" : null),
     time: job.urgency,
     initials,
-    poster: poster
-      ? { name: poster.full_name ?? poster.email, initials, color: "#2E5090", rating: 4.8, reviews: 0, memberSince: "2024", completionRate: 95 }
-      : null,
+    poster: posterStats,
     ownerId: job.user_id as string,
     isOwner,
     technicianCompletedAt: (job.technician_completed_at as string | null) ?? null,
