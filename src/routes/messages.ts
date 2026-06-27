@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "../db.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
-import { canAccessJobMessages, getJobForMessaging } from "../utils/messages.js";
+import { canAccessJobMessages, getJobForMessaging, isJobMessageable } from "../utils/messages.js";
 
 const router = Router();
 
@@ -36,7 +36,7 @@ router.get("/conversations", requireAuth, async (req: AuthedRequest, res) => {
     if (viewer.role === "technician") {
       const { data: offers, error } = await db
         .from("offers")
-        .select("job_id, technician_id, job:jobs(id, title, user_id)")
+        .select("job_id, technician_id, job:jobs(id, title, user_id, status)")
         .eq("technician_id", viewer.id)
         .eq("status", "accepted")
         .order("created_at", { ascending: false });
@@ -45,8 +45,8 @@ router.get("/conversations", requireAuth, async (req: AuthedRequest, res) => {
 
       const threads = await Promise.all(
         (offers ?? []).map(async (o) => {
-          const job = unwrapJoin(o.job);
-          if (!job) return null;
+          const job = unwrapJoin(o.job) as { id: string; title: string; user_id: string; status: string } | null;
+          if (!job || !isJobMessageable(job.status)) return null;
 
           const { data: owner } = await db
             .from("users")
@@ -80,8 +80,9 @@ router.get("/conversations", requireAuth, async (req: AuthedRequest, res) => {
 
     const { data: jobs, error: jobsErr } = await db
       .from("jobs")
-      .select("id, title")
+      .select("id, title, status")
       .eq("user_id", viewer.id)
+      .in("status", ["in_progress", "completed"])
       .order("created_at", { ascending: false });
 
     if (jobsErr) throw jobsErr;
@@ -154,7 +155,7 @@ router.get("/job/:jobId", requireAuth, async (req: AuthedRequest, res) => {
 
     const allowed = await canAccessJobMessages(job, req.user!, technicianId);
     if (!allowed) {
-      return res.status(403).json({ error: "Pesan hanya tersedia setelah penawaran diterima" });
+      return res.status(403).json({ error: "Pesan hanya tersedia setelah pembayaran selesai" });
     }
 
     const { data, error } = await db
@@ -208,7 +209,7 @@ router.post("/job/:jobId", requireAuth, async (req: AuthedRequest, res) => {
 
     const allowed = await canAccessJobMessages(job, req.user!, technicianId);
     if (!allowed) {
-      return res.status(403).json({ error: "Pesan hanya tersedia setelah penawaran diterima" });
+      return res.status(403).json({ error: "Pesan hanya tersedia setelah pembayaran selesai" });
     }
 
     const { data, error } = await db

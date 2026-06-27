@@ -18,7 +18,16 @@ export async function getJobForMessaging(jobId: string): Promise<JobRow | null> 
   return data as JobRow;
 }
 
+const MESSAGEABLE_JOB_STATUSES = ["in_progress", "completed"] as const;
+
+export function isJobMessageable(status: string): boolean {
+  return (MESSAGEABLE_JOB_STATUSES as readonly string[]).includes(status);
+}
+
 export async function technicianCanMessageOnJob(jobId: string, technicianId: string): Promise<boolean> {
+  const job = await getJobForMessaging(jobId);
+  if (!job || !isJobMessageable(job.status)) return false;
+
   const { data: acceptedOffer } = await db
     .from("offers")
     .select("id")
