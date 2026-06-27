@@ -60,7 +60,7 @@ router.get("/:id/public", async (req, res) => {
   try {
     const { data: user, error: userErr } = await db
       .from("users")
-      .select("id, full_name, avatar_url, created_at")
+      .select("id, full_name, avatar_url")
       .eq("id", req.params.id)
       .eq("role", "technician")
       .maybeSingle();
@@ -97,7 +97,6 @@ router.get("/:id/public", async (req, res) => {
         id: user.id,
         name: user.full_name ?? "Tukang",
         avatarUrl: user.avatar_url,
-        memberSince: new Date(user.created_at).getFullYear().toString(),
         area: profile?.area ?? null,
         keahlian: profile?.keahlian ?? [],
         pengalaman: profile?.pengalaman ?? null,
