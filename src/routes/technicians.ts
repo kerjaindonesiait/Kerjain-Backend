@@ -130,15 +130,18 @@ router.get("/profile", requireAuth, requireRole("technician"), async (req: Authe
   res.json({
     profile: p
       ? {
+          phone: p.phone,
           area: p.area,
           keahlian: p.keahlian ?? [],
           pengalaman: p.pengalaman,
           tarif: p.tarif,
           bio: p.bio,
           verified: p.verified ?? false,
+          nik: p.nik,
+          ktpPhotoPath: p.ktp_photo_url,
+          selfiePhotoPath: p.selfie_photo_url,
           ktpPhotoUrl,
           selfiePhotoUrl,
-          nik: p.nik,
         }
       : null,
   });

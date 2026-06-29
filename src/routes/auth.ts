@@ -17,6 +17,7 @@ import {
   setAccessCookie,
   setAuthCookies,
 } from "../utils/cookies.js";
+import { basePublicUser, enrichPublicUser } from "../utils/userPublic.js";
 
 const router = Router();
 const OAUTH_STATE_MAX_AGE = "10m";
@@ -26,16 +27,7 @@ type OAuthMode = "signup" | "login";
 type OAuthState = { role: OAuthRole; mode: OAuthMode; next?: string };
 
 function publicUser(user: UserRow) {
-  return {
-    id: user.id,
-    email: user.email,
-    fullName: user.full_name,
-    role: user.role,
-    avatarUrl: user.avatar_url,
-    emailVerified: user.email_verified,
-    phone: user.phone ?? null,
-    createdAt: user.created_at,
-  };
+  return basePublicUser(user);
 }
 
 function oauthErrorRedirect(error = "oauth_failed", state?: OAuthState | null) {
@@ -193,7 +185,7 @@ router.post("/refresh", async (req, res) => {
 
     const accessToken = signAccessToken({ sub: user.id, email: user.email, role: user.role });
     setAccessCookie(res, accessToken);
-    res.json({ user: publicUser(user as UserRow) });
+    res.json({ user: await enrichPublicUser(user as UserRow) });
   } catch {
     res.status(401).json({ error: "Invalid refresh token" });
   }
@@ -202,7 +194,7 @@ router.post("/refresh", async (req, res) => {
 router.get("/me", requireAuth, async (req: AuthedRequest, res) => {
   const { data, error } = await db.from("users").select("*").eq("id", req.user!.id).single();
   if (error || !data) return res.status(404).json({ error: "User not found" });
-  res.json({ user: publicUser(data as UserRow) });
+  res.json({ user: await enrichPublicUser(data as UserRow) });
 });
 
 router.post("/logout", async (req, res) => {
@@ -235,7 +227,11 @@ router.post("/verify-email", async (req, res) => {
 
     await db.from("users").update({ email_verified: true }).eq("id", userId);
     const { data: user } = await db.from("users").select("*").eq("id", userId).single();
-    res.json({ ok: true, user: user ? publicUser(user as UserRow) : null });
+    if (!user) return res.json({ ok: true, user: null });
+
+    const tokens = await issueTokens(user as UserRow);
+    setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
+    res.json({ ok: true, user: tokens.user });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Verification failed" });

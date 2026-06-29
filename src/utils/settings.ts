@@ -6,7 +6,7 @@ export type AppSettings = {
 };
 
 const DEFAULTS: AppSettings = {
-  requireVerifiedToQuote: false,
+  requireVerifiedToQuote: true,
   maintenanceMode: false,
 };
 
@@ -16,7 +16,7 @@ export async function getAppSettings(): Promise<AppSettings> {
 
   const map = Object.fromEntries(data.map((r) => [r.key, r.value]));
   return {
-    requireVerifiedToQuote: map.require_verified_to_quote === true,
+    requireVerifiedToQuote: map.require_verified_to_quote !== false,
     maintenanceMode: map.maintenance_mode === true,
   };
 }

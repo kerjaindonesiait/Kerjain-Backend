@@ -2,6 +2,7 @@ import { db, type UserRow } from "../db.js";
 import { hashToken, signAccessToken, signRefreshToken } from "./jwt.js";
 import { sendWelcomeEmail } from "./authTokens.js";
 import { AccountExistsError } from "./authErrors.js";
+import { enrichPublicUser } from "./userPublic.js";
 
 export type OAuthProvider = "google" | "facebook";
 export type OAuthMode = "signup" | "login";
@@ -101,15 +102,6 @@ export async function issueTokens(user: UserRow) {
   return {
     accessToken,
     refreshToken,
-    user: {
-      id: user.id,
-      email: user.email,
-      fullName: user.full_name,
-      role: user.role,
-      avatarUrl: user.avatar_url,
-      emailVerified: user.email_verified,
-      phone: user.phone ?? null,
-      createdAt: user.created_at,
-    },
+    user: await enrichPublicUser(user),
   };
 }
