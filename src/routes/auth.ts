@@ -40,8 +40,10 @@ function publicUser(user: UserRow) {
 
 function oauthErrorRedirect(error = "oauth_failed", state?: OAuthState | null) {
   let path = "/masuk";
-  if (state?.role === "technician") path = "/daftar-tukang";
-  else if (state?.mode === "signup") path = "/daftar";
+  if (error !== "account_exists") {
+    if (state?.role === "technician") path = "/daftar-tukang";
+    else if (state?.mode === "signup") path = "/daftar";
+  }
   const redirect = new URL(path, config.frontendUrl);
   redirect.searchParams.set("error", error);
   return redirect.toString();
