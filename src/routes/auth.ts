@@ -36,8 +36,9 @@ function publicUser(user: UserRow) {
   };
 }
 
-function oauthErrorRedirect(error = "oauth_failed") {
-  const redirect = new URL("/masuk", config.frontendUrl);
+function oauthErrorRedirect(error = "oauth_failed", state?: OAuthState | null) {
+  const path = state?.role === "technician" ? "/daftar-tukang" : "/masuk";
+  const redirect = new URL(path, config.frontendUrl);
   redirect.searchParams.set("error", error);
   return redirect.toString();
 }
@@ -416,12 +417,21 @@ router.get("/google", (req, res) => {
 });
 
 router.get("/google/callback", async (req, res) => {
+  const state = parseOAuthState(req.query.state);
+  const oauthError = typeof req.query.error === "string" ? req.query.error : null;
+
+  if (oauthError === "access_denied") {
+    return res.redirect(oauthErrorRedirect("oauth_denied", state));
+  }
+  if (oauthError) {
+    return res.redirect(oauthErrorRedirect("oauth_failed", state));
+  }
+
   try {
     const code = req.query.code as string;
-    if (!code) return res.status(400).send("Missing code");
+    if (!code) return res.redirect(oauthErrorRedirect("oauth_failed", state));
 
-    const state = parseOAuthState(req.query.state);
-    if (!state) return res.redirect(oauthErrorRedirect());
+    if (!state) return res.redirect(oauthErrorRedirect("oauth_failed", state));
 
     const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
@@ -435,13 +445,13 @@ router.get("/google/callback", async (req, res) => {
       }),
     });
     const tokenData = await tokenRes.json();
-    if (!tokenData.access_token) return res.status(400).send("OAuth token exchange failed");
+    if (!tokenData.access_token) return res.redirect(oauthErrorRedirect("oauth_failed", state));
 
     const profileRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
     const profile = await profileRes.json();
-    if (!profile.id || !profile.email) return res.redirect(oauthErrorRedirect("google_profile_failed"));
+    if (!profile.id || !profile.email) return res.redirect(oauthErrorRedirect("oauth_failed", state));
 
     const user = await findOrCreateOAuthUser({
       provider: "google",
@@ -456,7 +466,7 @@ router.get("/google/callback", async (req, res) => {
     res.redirect(oauthCallbackUrl(state.next));
   } catch (err) {
     console.error(err);
-    res.redirect(oauthErrorRedirect());
+    res.redirect(oauthErrorRedirect("oauth_failed", state));
   }
 });
 
