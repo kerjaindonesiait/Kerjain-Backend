@@ -147,6 +147,61 @@ router.get("/profile", requireAuth, requireRole("technician"), async (req: Authe
   });
 });
 
+router.patch("/profile", requireAuth, requireRole("technician"), async (req: AuthedRequest, res) => {
+  try {
+    const { phone, keahlian, bio, pengalaman, tarif, area } = req.body;
+    const updates: Record<string, unknown> = {};
+
+    if (phone !== undefined) {
+      if (!phone || !String(phone).trim()) {
+        updates.phone = null;
+      } else {
+        const resolved = await resolveTechnicianPhone(String(phone), req.user!.id);
+        if ("error" in resolved) return res.status(409).json({ error: resolved.error });
+        updates.phone = resolved.phone;
+      }
+    }
+    if (keahlian !== undefined) updates.keahlian = Array.isArray(keahlian) ? keahlian : [];
+    if (bio !== undefined) updates.bio = bio || null;
+    if (pengalaman !== undefined) updates.pengalaman = pengalaman || null;
+    if (tarif !== undefined) updates.tarif = tarif || null;
+    if (area !== undefined) updates.area = area || null;
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: "No fields to update" });
+    }
+
+    const { data: existing } = await db
+      .from("technician_profiles")
+      .select("id")
+      .eq("user_id", req.user!.id)
+      .maybeSingle();
+
+    if (!existing) {
+      return res.status(404).json({ error: "Profil tukang belum ada" });
+    }
+
+    const { data, error } = await db
+      .from("technician_profiles")
+      .update(updates)
+      .eq("user_id", req.user!.id)
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === "23505") {
+        return res.status(409).json({ error: "Nomor telepon ini sudah terdaftar untuk akun tukang lain" });
+      }
+      throw error;
+    }
+
+    res.json({ profile: data });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to update profile" });
+  }
+});
+
 router.post("/profile", requireAuth, requireRole("technician"), async (req: AuthedRequest, res) => {
   try {
     const body = req.body;
