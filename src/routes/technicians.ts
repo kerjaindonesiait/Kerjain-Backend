@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db } from "../db.js";
 import { requireAuth, requireRole, type AuthedRequest } from "../middleware/auth.js";
 import { resolveTechnicianPhone } from "../utils/phone.js";
+import { ACCOUNT_EXISTS_MESSAGE } from "../utils/authErrors.js";
 import { isOwnedKtpPath, signKtpPath } from "../utils/ktpStorage.js";
 
 const router = Router();
@@ -228,7 +229,7 @@ router.post("/register", async (req, res) => {
       .single();
 
     if (userErr) {
-      if (userErr.code === "23505") return res.status(409).json({ error: "Email already registered" });
+      if (userErr.code === "23505") return res.status(409).json({ error: ACCOUNT_EXISTS_MESSAGE });
       throw userErr;
     }
 

@@ -5,6 +5,7 @@ import { hashPassword, verifyPassword } from "../utils/password.js";
 import { hashToken, signAccessToken, verifyRefreshToken } from "../utils/jwt.js";
 import { isAdminEmail } from "../utils/admin.js";
 import { findOrCreateOAuthUser, issueTokens } from "../utils/oauth.js";
+import { AccountExistsError, ACCOUNT_EXISTS_MESSAGE } from "../utils/authErrors.js";
 import { consumeToken, sendPasswordResetEmail, sendVerificationEmail } from "../utils/authTokens.js";
 import { resolveCustomerPhone } from "../utils/phone.js";
 import { config } from "../config.js";
@@ -21,7 +22,8 @@ const router = Router();
 const OAUTH_STATE_MAX_AGE = "10m";
 
 type OAuthRole = "user" | "technician";
-type OAuthState = { role: OAuthRole; next?: string };
+type OAuthMode = "signup" | "login";
+type OAuthState = { role: OAuthRole; mode: OAuthMode; next?: string };
 
 function publicUser(user: UserRow) {
   return {
@@ -37,7 +39,9 @@ function publicUser(user: UserRow) {
 }
 
 function oauthErrorRedirect(error = "oauth_failed", state?: OAuthState | null) {
-  const path = state?.role === "technician" ? "/daftar-tukang" : "/masuk";
+  let path = "/masuk";
+  if (state?.role === "technician") path = "/daftar-tukang";
+  else if (state?.mode === "signup") path = "/daftar";
   const redirect = new URL(path, config.frontendUrl);
   redirect.searchParams.set("error", error);
   return redirect.toString();
@@ -58,6 +62,10 @@ function parseOAuthRole(value: unknown): OAuthRole {
   return value === "technician" ? "technician" : "user";
 }
 
+function parseOAuthMode(value: unknown): OAuthMode {
+  return value === "signup" ? "signup" : "login";
+}
+
 function encodeOAuthState(state: OAuthState) {
   return jwt.sign(state, config.jwtAccessSecret, { expiresIn: OAUTH_STATE_MAX_AGE });
 }
@@ -68,6 +76,7 @@ function parseOAuthState(stateParam: unknown): OAuthState | null {
     const payload = jwt.verify(stateParam, config.jwtAccessSecret) as Partial<OAuthState>;
     return {
       role: parseOAuthRole(payload.role),
+      mode: parseOAuthMode(payload.mode),
       next: safeRelativePath(payload.next),
     };
   } catch {
@@ -99,7 +108,7 @@ router.post("/register", async (req, res) => {
       .single();
 
     if (error) {
-      if (error.code === "23505") return res.status(409).json({ error: "Email already registered" });
+      if (error.code === "23505") return res.status(409).json({ error: ACCOUNT_EXISTS_MESSAGE });
       throw error;
     }
 
@@ -403,7 +412,8 @@ router.get("/google", (req, res) => {
     return res.status(503).json({ error: "Google OAuth not configured" });
   }
   const role = parseOAuthRole(req.query.role);
-  const next = safeRelativePath(req.query.next) ?? (role === "technician" ? "/daftar-tukang?resume=1&provider=google" : undefined);
+  const mode = parseOAuthMode(req.query.mode);
+  const next = safeRelativePath(req.query.next) ?? (role === "technician" && mode === "signup" ? "/daftar-tukang?resume=1&provider=google" : undefined);
   const params = new URLSearchParams({
     client_id: config.google.clientId,
     redirect_uri: config.google.redirectUri,
@@ -411,7 +421,7 @@ router.get("/google", (req, res) => {
     scope: "openid email profile",
     access_type: "offline",
     prompt: "consent",
-    state: encodeOAuthState({ role, next }),
+    state: encodeOAuthState({ role, mode, next }),
   });
   res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
 });
@@ -459,12 +469,15 @@ router.get("/google/callback", async (req, res) => {
       email: profile.email,
       fullName: profile.name ?? null,
       avatarUrl: profile.picture ?? null,
-    }, { role: state.role });
+    }, { role: state.role, mode: state.mode });
 
     const tokens = await issueTokens(user);
     setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
     res.redirect(oauthCallbackUrl(state.next));
   } catch (err) {
+    if (err instanceof AccountExistsError) {
+      return res.redirect(oauthErrorRedirect("account_exists", state));
+    }
     console.error(err);
     res.redirect(oauthErrorRedirect("oauth_failed", state));
   }

@@ -1,8 +1,10 @@
 import { db, type UserRow } from "../db.js";
 import { hashToken, signAccessToken, signRefreshToken } from "./jwt.js";
 import { sendWelcomeEmail } from "./authTokens.js";
+import { AccountExistsError } from "./authErrors.js";
 
 export type OAuthProvider = "google" | "facebook";
+export type OAuthMode = "signup" | "login";
 
 export interface OAuthProfile {
   provider: OAuthProvider;
@@ -14,23 +16,11 @@ export interface OAuthProfile {
 
 export async function findOrCreateOAuthUser(
   profile: OAuthProfile,
-  opts?: { role?: "user" | "technician" },
+  opts?: { role?: "user" | "technician"; mode?: OAuthMode },
 ): Promise<UserRow> {
   const intendedRole = opts?.role ?? "user";
+  const mode = opts?.mode ?? "login";
 
-  async function applyTechnicianRole(user: UserRow): Promise<UserRow> {
-    if (intendedRole === "technician" && user.role !== "technician") {
-      const { data, error } = await db
-        .from("users")
-        .update({ role: "technician" })
-        .eq("id", user.id)
-        .select()
-        .single();
-      if (error) throw error;
-      return data as UserRow;
-    }
-    return user;
-  }
   const { data: existingOAuth } = await db
     .from("oauth_accounts")
     .select("user_id")
@@ -41,7 +31,8 @@ export async function findOrCreateOAuthUser(
   if (existingOAuth) {
     const { data } = await db.from("users").select("*").eq("id", existingOAuth.user_id).single();
     if (!data) throw new Error("Linked user not found");
-    return applyTechnicianRole(data as UserRow);
+    if (mode === "signup") throw new AccountExistsError();
+    return data as UserRow;
   }
 
   const { data: existingUser } = await db
@@ -51,6 +42,8 @@ export async function findOrCreateOAuthUser(
     .maybeSingle();
 
   if (existingUser) {
+    if (mode === "signup") throw new AccountExistsError();
+
     await db.from("oauth_accounts").insert({
       user_id: existingUser.id,
       provider: profile.provider,
@@ -61,7 +54,7 @@ export async function findOrCreateOAuthUser(
       await db.from("users").update({ email_verified: true }).eq("id", existingUser.id);
       existingUser.email_verified = true;
     }
-    return applyTechnicianRole(existingUser as UserRow);
+    return existingUser as UserRow;
   }
 
   const { data: newUser, error } = await db
