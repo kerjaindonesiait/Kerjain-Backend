@@ -4,6 +4,7 @@ import { requireAuth, optionalAuth, requireRole, type AuthedRequest } from "../m
 import { geocodeJobLocation } from "../utils/geocode.js";
 import { validateCreateJobBody } from "../utils/jobValidation.js";
 import { markTechnicianJobDone, releaseEscrowForJob, workspaceViewerRole } from "../utils/jobWorkspace.js";
+import { notifyPosterJobMarkedDone } from "../utils/jobDoneNotify.js";
 import { getPosterStats } from "../utils/posterStats.js";
 
 const router = Router();
@@ -237,6 +238,8 @@ router.post("/:id/mark-done", requireAuth, requireRole("technician"), async (req
 
     await markTechnicianJobDone(job.id);
 
+    notifyPosterJobMarkedDone(job.id, req.user!.id).catch(console.error);
+
     const { data: updated, error } = await db.from("jobs").select("*").eq("id", job.id).single();
     if (error || !updated) throw error ?? new Error("Job not found after mark-done");
 
@@ -304,6 +307,7 @@ router.post("/:id/complete", requireAuth, async (req: AuthedRequest, res) => {
         return res.status(400).json({ error: "Sudah ditandai selesai — menunggu konfirmasi pelanggan" });
       }
       await markTechnicianJobDone(job.id);
+      notifyPosterJobMarkedDone(job.id, req.user!.id).catch(console.error);
     } else if (role === "owner") {
       if (job.status !== "in_progress") {
         return res.status(400).json({ error: "Pekerjaan tidak sedang berjalan" });

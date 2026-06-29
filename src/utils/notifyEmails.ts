@@ -50,3 +50,19 @@ export async function sendPaymentConfirmedEmail(
     actionLabel: label,
   });
 }
+
+export async function sendJobMarkedDoneByTechnicianEmail(
+  ownerEmail: string,
+  ownerName: string | null,
+  jobTitle: string,
+  technicianName: string,
+) {
+  const url = `${config.frontendUrl}/pekerjaan-saya`;
+  await sendAuthEmail({
+    to: ownerEmail,
+    subject: `Tukang menandai selesai — ${jobTitle}`,
+    body: `Halo${ownerName ? ` ${ownerName}` : ""}, ${technicianName} telah menandai pekerjaan "${jobTitle}" sebagai selesai. Silakan periksa hasil pekerjaan dan konfirmasi agar pembayaran dapat dicairkan.`,
+    actionUrl: url,
+    actionLabel: "Konfirmasi pekerjaan",
+  });
+}
