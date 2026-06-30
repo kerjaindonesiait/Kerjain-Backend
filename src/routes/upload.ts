@@ -2,10 +2,10 @@ import { Router } from "express";
 import { randomUUID } from "crypto";
 import { db } from "../db.js";
 import { requireAuth, requireRole, type AuthedRequest } from "../middleware/auth.js";
+import { JOB_BUCKET, isOwnedJobPhotoPath } from "../utils/jobPhotoStorage.js";
 import { KTP_BUCKET, isOwnedKtpPath, signKtpPath } from "../utils/ktpStorage.js";
 
 const router = Router();
-const JOB_BUCKET = "job-photos";
 const MAX_BYTES = 5 * 1024 * 1024;
 const ALLOWED = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp", "image/heic"]);
 
@@ -64,10 +64,6 @@ router.post("/job-photo", requireAuth, requireRole("user"), async (req: AuthedRe
     res.status(500).json({ error: "Gagal mengunggah foto" });
   }
 });
-
-function isOwnedJobPhotoPath(path: string, userId: string) {
-  return path.startsWith(`draft/${userId}/`) || path.startsWith(`${userId}/`);
-}
 
 router.delete("/job-photo", requireAuth, requireRole("user"), async (req: AuthedRequest, res) => {
   try {
