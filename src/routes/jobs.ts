@@ -130,6 +130,26 @@ router.get("/", optionalAuth, async (req: AuthedRequest, res) => {
     if (error) throw error;
 
     let rows = data ?? [];
+
+    if (req.user?.role === "user") {
+      const { data: mine, error: mineErr } = await db
+        .from("jobs")
+        .select("*")
+        .eq("user_id", req.user.id)
+        .in("status", ["open", "assigned", "in_progress"])
+        .order("created_at", { ascending: false });
+
+      if (!mineErr && mine?.length) {
+        const seen = new Set(rows.map((j) => j.id as string));
+        for (const job of mine) {
+          if (!seen.has(job.id as string)) {
+            rows.push(job);
+            seen.add(job.id as string);
+          }
+        }
+      }
+    }
+
     if (req.user?.role === "technician") {
       rows = rows.filter((j) => j.user_id !== req.user!.id);
     }
