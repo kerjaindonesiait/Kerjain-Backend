@@ -5,6 +5,7 @@ import { geocodeJobLocation } from "../utils/geocode.js";
 import { validateCreateJobBody } from "../utils/jobValidation.js";
 import { markTechnicianJobDone, releaseEscrowForJob, workspaceViewerRole } from "../utils/jobWorkspace.js";
 import { notifyPosterJobMarkedDone } from "../utils/jobDoneNotify.js";
+import { normalizeJobPhotoRefs, resolveJobPhotoUrls } from "../utils/jobPhotoStorage.js";
 import { getPosterStats } from "../utils/posterStats.js";
 
 const router = Router();
@@ -89,7 +90,7 @@ async function enrichJob(job: Record<string, unknown>, viewerId?: string) {
     category: job.category,
     title: job.title,
     description: job.description,
-    photos: job.photos,
+    photos: resolveJobPhotoUrls(job.photos as string[] | null),
     area: job.area,
     alamat: job.alamat,
     latitude: job.latitude ?? null,
@@ -357,9 +358,7 @@ router.post("/", requireAuth, requireRole("user"), async (req: AuthedRequest, re
     const budgetRaw = body.budgetType === "minta" ? null : parseBudget(String(body.budget ?? ""));
     const coords = await geocodeJobLocation(String(body.area ?? ""), body.alamat as string | undefined);
 
-    const photos = Array.isArray(body.photos)
-      ? (body.photos as string[]).filter((p) => typeof p === "string" && p.startsWith("http"))
-      : [];
+    const photos = normalizeJobPhotoRefs(body.photos, req.user!.id);
 
     const { data, error } = await db
       .from("jobs")
